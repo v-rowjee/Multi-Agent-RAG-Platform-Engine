@@ -35,9 +35,6 @@ def _unauthorized() -> HTTPException:
 def _claims_from_token(access_token: str) -> dict[str, Any]:
     """Verify a Supabase JWT, including the SDK's legacy-HS256 fallback."""
     claims_response = supabase_gateway.client.auth.get_claims(access_token)
-    # supabase-py 2.x returns a TypedDict, not an object with a ``claims``
-    # attribute. Attribute access therefore returns None even after the JWT
-    # has been successfully verified.
     claims = (
         claims_response.get("claims")
         if isinstance(claims_response, dict)
