@@ -385,6 +385,7 @@ class DashboardAssembler:
             "title": title,
             "value": f"{display}{suffix}",
             "rawValue": value,
+            "query": f"Calculate {title.lower()} from the uploaded dataset",
             "indicator": {"kind": "note", "text": "Detected during upload"},
         }
 

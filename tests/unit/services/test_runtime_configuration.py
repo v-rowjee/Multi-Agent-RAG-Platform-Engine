@@ -208,12 +208,12 @@ def test_prompt_bundles_validate_and_render_structured_toon() -> None:
         )
 
 
-def test_kpi_prompt_requires_four_grounded_definitions() -> None:
+def test_kpi_prompt_requires_four_grounded_title_requests() -> None:
     prompts = render_agent_prompts("multi/kpi_trend", payload={})
 
     system = toons.loads(prompts.system, strict=True)
 
-    assert "4 to 8 valid KPI definitions" in system["kpi_coverage"]
+    assert "4 to 8 KPI title requests" in system["kpi_coverage"]
     assert "Never invent columns" in system["kpi_coverage"]
 
 

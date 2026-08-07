@@ -83,3 +83,6 @@ desktop.ini
 # Dependency/tool caches
 .cache/
 .pip-cache/
+
+# Graphify
+graphify-out/

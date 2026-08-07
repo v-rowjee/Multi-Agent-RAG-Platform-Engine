@@ -107,22 +107,39 @@ def _get_str(data: dict[str, Any], key: str) -> str:
     return val.strip()
 
 
-def _get_int(data: dict[str, Any], key: str, *, positive: bool = False) -> int:
+def _get_int(
+    data: dict[str, Any],
+    key: str,
+    *,
+    positive: bool = False,
+    field_name: str | None = None,
+) -> int:
+    field_name = field_name or key
     val = data.get(key)
     if not isinstance(val, int):
-        raise RuntimeConfigurationError(f"'{key}' must be an integer")
+        raise RuntimeConfigurationError(f"'{field_name}' must be an integer")
     if positive and val <= 0:
-        raise RuntimeConfigurationError(f"'{key}' must be positive")
+        raise RuntimeConfigurationError(f"'{field_name}' must be positive")
     return val
 
 
-def _get_float(data: dict[str, Any], key: str, *, min_val: float = 0, max_val: float = 1) -> float:
+def _get_float(
+    data: dict[str, Any],
+    key: str,
+    *,
+    min_val: float = 0,
+    max_val: float = 1,
+    field_name: str | None = None,
+) -> float:
+    field_name = field_name or key
     val = data.get(key)
     if not isinstance(val, (int, float)):
-        raise RuntimeConfigurationError(f"'{key}' must be a number")
+        raise RuntimeConfigurationError(f"'{field_name}' must be a number")
     val = float(val)
     if not min_val <= val <= max_val:
-        raise RuntimeConfigurationError(f"'{key}' must be between {min_val} and {max_val}")
+        raise RuntimeConfigurationError(
+            f"'{field_name}' must be between {min_val} and {max_val}"
+        )
     return val
 
 
@@ -145,12 +162,18 @@ def _get_agent_policy(name: str, data: dict[str, Any]) -> AgentModelPolicy:
             "supports_response_format is false"
         )
 
+    timeout_seconds = data.get("timeout_seconds", 120)
+    if not isinstance(timeout_seconds, int) or timeout_seconds <= 0:
+        raise RuntimeConfigurationError(
+            f"agents.{name}.timeout_seconds must be a positive integer"
+        )
+
     return AgentModelPolicy(
         provider=provider,  # type: ignore[arg-type]
         model=_get_str(data, "model"),
         temperature=_get_float(data, "temperature", min_val=0, max_val=2),
         max_completion_tokens=_get_int(data, "max_completion_tokens", positive=True),
-        timeout_seconds=_get_int(data.get("timeout_seconds", 120), "timeout_seconds", positive=True),
+        timeout_seconds=timeout_seconds,
         reasoning_effort=reasoning,
         strict_json_schema=strict_json_schema,
         supports_response_format=supports_response_format,
@@ -229,14 +252,28 @@ def load_rag_config(path: Path = RAG_CONFIG_PATH) -> RagConfiguration:
     retrieval = get_section("retrieval")
     chunking = get_section("chunking")
 
-    chunk_size = _get_int(chunking, "size", positive=True)
-    chunk_overlap = _get_int(chunking, "overlap")
+    chunk_size = _get_int(
+        chunking, "size", positive=True, field_name="chunking.size"
+    )
+    chunk_overlap = _get_int(chunking, "overlap", field_name="chunking.overlap")
     if chunk_overlap >= chunk_size:
         raise RuntimeConfigurationError("chunking.overlap must be smaller than chunking.size")
 
-    vector_search_limit = _get_int(retrieval, "vector_search_limit", positive=True)
-    chat_search_limit = _get_int(retrieval, "chat_search_limit", positive=True)
-    rerank_limit = _get_int(reranking, "limit", positive=True)
+    vector_search_limit = _get_int(
+        retrieval,
+        "vector_search_limit",
+        positive=True,
+        field_name="retrieval.vector_search_limit",
+    )
+    chat_search_limit = _get_int(
+        retrieval,
+        "chat_search_limit",
+        positive=True,
+        field_name="retrieval.chat_search_limit",
+    )
+    rerank_limit = _get_int(
+        reranking, "limit", positive=True, field_name="reranking.limit"
+    )
     if chat_search_limit > vector_search_limit:
         raise RuntimeConfigurationError(
             "retrieval.chat_search_limit cannot exceed retrieval.vector_search_limit"
@@ -249,27 +286,71 @@ def load_rag_config(path: Path = RAG_CONFIG_PATH) -> RagConfiguration:
     return RagConfiguration(
         embedding=EmbeddingPolicy(
             model=_get_str(embedding, "model"),
-            dimensions=_get_int(embedding, "dimensions", positive=True),
-            batch_size=_get_int(embedding, "batch_size", positive=True),
+            dimensions=_get_int(
+                embedding,
+                "dimensions",
+                positive=True,
+                field_name="embedding.dimensions",
+            ),
+            batch_size=_get_int(
+                embedding,
+                "batch_size",
+                positive=True,
+                field_name="embedding.batch_size",
+            ),
         ),
         reranking=RerankingPolicy(
             model=_get_str(reranking, "model"),
-            batch_size=_get_int(reranking, "batch_size", positive=True),
+            batch_size=_get_int(
+                reranking,
+                "batch_size",
+                positive=True,
+                field_name="reranking.batch_size",
+            ),
             limit=rerank_limit,
-            max_length=_get_int(reranking, "max_length", positive=True),
+            max_length=_get_int(
+                reranking,
+                "max_length",
+                positive=True,
+                field_name="reranking.max_length",
+            ),
         ),
         retrieval=RetrievalPolicy(
             vector_search_limit=vector_search_limit,
-            chat_search_limit=_get_int(retrieval, "chat_search_limit", positive=True),
-            match_threshold=_get_float(retrieval, "match_threshold"),
-            max_context_chars=_get_int(retrieval, "max_context_chars", positive=True),
+            chat_search_limit=chat_search_limit,
+            match_threshold=_get_float(
+                retrieval,
+                "match_threshold",
+                field_name="retrieval.match_threshold",
+            ),
+            max_context_chars=_get_int(
+                retrieval,
+                "max_context_chars",
+                positive=True,
+                field_name="retrieval.max_context_chars",
+            ),
         ),
         chunking=ChunkingPolicy(
             size=chunk_size,
             overlap=chunk_overlap,
-            max_row_batch_documents=_get_int(chunking, "max_row_batch_documents", positive=True),
-            rows_per_batch_document=_get_int(chunking, "rows_per_batch_document", positive=True),
-            max_columns_per_row_document=_get_int(chunking, "max_columns_per_row_document", positive=True),
+            max_row_batch_documents=_get_int(
+                chunking,
+                "max_row_batch_documents",
+                positive=True,
+                field_name="chunking.max_row_batch_documents",
+            ),
+            rows_per_batch_document=_get_int(
+                chunking,
+                "rows_per_batch_document",
+                positive=True,
+                field_name="chunking.rows_per_batch_document",
+            ),
+            max_columns_per_row_document=_get_int(
+                chunking,
+                "max_columns_per_row_document",
+                positive=True,
+                field_name="chunking.max_columns_per_row_document",
+            ),
         ),
     )
 

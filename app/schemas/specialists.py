@@ -24,6 +24,23 @@ class KPIDefinition(StrictModel):
     dimension: str | None = None
     dimension_value: str | int | float | bool | None = None
 
+
+class KPIRequest(StrictModel):
+    """A user-facing KPI title and the focused request used to resolve it."""
+
+    id: str
+    title: str
+    prompt: str
+
+
+class KPIValueDefinition(StrictModel):
+    """The deterministic dataframe operation required for one KPI request."""
+
+    measure: str
+    aggregation: str
+    dimension: str | None = None
+    dimension_value: str | int | float | bool | None = None
+
 class TrendDefinition(StrictModel):
     id: str
     title: str
@@ -34,7 +51,7 @@ class TrendDefinition(StrictModel):
     group_by: str | None = None
 
 class KPITrendPlan(StrictModel):
-    kpis: list[KPIDefinition] = Field(default_factory=list, max_length=MAX_KPIS)
+    kpis: list[KPIRequest] = Field(default_factory=list, max_length=MAX_KPIS)
     trends: list[TrendDefinition] = Field(default_factory=list, max_length=MAX_TRENDS)
     limitations: list[str] = Field(default_factory=list)
 
@@ -45,6 +62,7 @@ class KPIResult(StrictModel):
     raw_value: float | int
     aggregation: str
     measure: str
+    query: str
     dimension: str | None = None
     current_period: str | None = None
     previous_period: str | None = None

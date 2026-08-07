@@ -14,6 +14,7 @@ from app.agents.multi.dashboard_generation import DashboardGenerationAgent
 from app.agents.multi.data_preparation import data_preparation_agent
 from app.agents.multi.forecasting import ForecastingAgent
 from app.agents.multi.insight_synthesis import _fallback as synthesis_fallback
+from app.agents.multi import kpi_trend as kpi_trend_module
 from app.agents.multi.kpi_trend import KPITrendAgent
 from app.agents.multi.orchestrator import (
     OrchestratorAgent,
@@ -24,6 +25,7 @@ from app.agents.multi.orchestrator import (
 )
 from app.core.config import configured_agent_models
 from app.schemas.orchestration import AgentDecision, OrchestrationPlan
+from app.schemas.specialists import KPIRequest, KPITrendPlan, KPIValueDefinition
 from app.services.data.cleaning import _generic_clean_csv
 from app.services.data.series import (
     aggregation_for_measure,
@@ -162,6 +164,61 @@ def test_kpis_use_latest_period_and_percentage_change(
     assert aggregation_for_measure("discount_pct") == "mean"
     assert result.trends[0].measure == "net_revenue_gbp"
     assert execution_status == "fallback"
+
+
+def test_kpi_title_requests_are_resolved_independently_before_calculation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "sales.csv"
+    _rows().to_csv(path, index=False)
+    prepared = _prepared(path)
+    requests = [
+        KPIRequest(
+            id="kpi_revenue",
+            title="Latest Revenue",
+            prompt="Show the latest-period revenue.",
+        ),
+        KPIRequest(
+            id="kpi_profit",
+            title="Latest Profit",
+            prompt="Show the latest-period profit.",
+        ),
+    ]
+    resolved_ids: list[str] = []
+
+    async def title_plan(_: dict[str, Any]) -> KPITrendPlan:
+        return KPITrendPlan(kpis=requests)
+
+    async def resolve_value(
+        _: dict[str, Any],
+        request: KPIRequest,
+    ) -> KPIValueDefinition:
+        resolved_ids.append(request.id)
+        return KPIValueDefinition(
+            measure="net_revenue_gbp" if request.id == "kpi_revenue" else "profit_gbp",
+            aggregation="sum",
+        )
+
+    monkeypatch.setattr(kpi_trend_module, "_request_plan", title_plan)
+    monkeypatch.setattr(
+        kpi_trend_module,
+        "_request_kpi_value_definition",
+        resolve_value,
+    )
+
+    result, execution_status = asyncio.run(
+        KPITrendAgent().run_with_status(prepared)
+    )
+
+    assert set(resolved_ids) == {"kpi_revenue", "kpi_profit"}
+    revenue = next(item for item in result.kpis if item.id == "kpi_revenue")
+    profit = next(item for item in result.kpis if item.id == "kpi_profit")
+    assert revenue.title == "Latest Revenue"
+    assert revenue.value == 4380
+    assert profit.title == "Latest Profit"
+    assert profit.value == 1314
+    assert execution_status == "succeeded"
 
 
 def test_multi_year_transaction_history_uses_a_readable_monthly_grain() -> None:

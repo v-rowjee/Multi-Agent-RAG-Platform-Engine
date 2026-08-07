@@ -1,6 +1,7 @@
 """KPI and trend specialist. The LLM plans definitions; pandas calculates values."""
 from __future__ import annotations
 
+import asyncio
 import math
 import re
 from pathlib import Path
@@ -14,9 +15,11 @@ from app.core.model_policy import ModelExecutionStatus, agent_model_usage
 from app.core.prompt_loader import render_agent_prompts
 from app.schemas.specialists import (
     KPIDefinition,
+    KPIRequest,
     KPIResult,
     KPITrendOutput,
     KPITrendPlan,
+    KPIValueDefinition,
     TrendDefinition,
     TrendPoint,
     TrendSeries,
@@ -88,6 +91,28 @@ async def _request_plan(prepared: dict[str, Any]) -> KPITrendPlan:
     )
 
 
+async def _request_kpi_value_definition(
+    prepared: dict[str, Any],
+    request: KPIRequest,
+) -> KPIValueDefinition:
+    """Resolve one KPI request without allowing the model to calculate its value."""
+    prompts = render_agent_prompts(
+        "multi/kpi_trend",
+        "kpi_value",
+        payload=_planning_payload(prepared),
+        kpi=request.model_dump(mode="json"),
+    )
+    return await request_structured(
+        policy=agent_model_policy("kpi_trend"),
+        response_model=KPIValueDefinition,
+        schema_name="kpi_value_definition",
+        messages=[
+            {"role": "system", "content": prompts.system},
+            {"role": "user", "content": prompts.user},
+        ],
+    )
+
+
 def _is_numeric(df: pd.DataFrame, column: str) -> bool:
     return column in df and pd.api.types.is_numeric_dtype(df[column])
 
@@ -104,7 +129,10 @@ def _fallback_aggregation(measure: str) -> str:
     return aggregation_for_measure(measure)
 
 
-def _fallback_plan(prepared: dict[str, Any], df: pd.DataFrame) -> KPITrendPlan:
+def _fallback_plan(
+    prepared: dict[str, Any],
+    df: pd.DataFrame,
+) -> tuple[list[KPIDefinition], list[TrendDefinition], list[str]]:
     measures = ranked_measures(prepared, df)
     kpis = [KPIDefinition(id=f"kpi_{_slug(measure)}", title=f"{_fallback_aggregation(measure).title()} {measure.replace('_', ' ').title()}", measure=measure, aggregation=_fallback_aggregation(measure)) for measure in measures[:4]]
     date = selected_date_column(prepared, df)
@@ -112,15 +140,22 @@ def _fallback_plan(prepared: dict[str, Any], df: pd.DataFrame) -> KPITrendPlan:
     trends = []
     if primary and date:
         trends.append(TrendDefinition(id=f"trend_{_slug(primary.measure)}_{primary.granularity}", title=f"{primary.granularity.title()} {primary.measure.replace('_', ' ').title()}", measure=primary.measure, aggregation=primary.aggregation, date_column=date, granularity=primary.granularity))
-    return KPITrendPlan(kpis=kpis, trends=trends, limitations=["Deterministic planning was used because LLM planning was unavailable or invalid."])
+    return kpis, trends, [
+        "Deterministic planning was used because LLM planning was unavailable or invalid."
+    ]
 
 
-def _valid_plan(plan: KPITrendPlan, df: pd.DataFrame, prepared: dict[str, Any]) -> tuple[KPITrendPlan, list[str]]:
+def _valid_plan(
+    kpi_definitions: list[KPIDefinition],
+    trends_to_validate: list[TrendDefinition],
+    df: pd.DataFrame,
+    prepared: dict[str, Any],
+) -> tuple[list[KPIDefinition], list[TrendDefinition], list[str]]:
     warnings: list[str] = []
     kpis: list[KPIDefinition] = []
     trends: list[TrendDefinition] = []
     used: set[str] = set()
-    for item in plan.kpis[:MAX_KPIS]:
+    for item in kpi_definitions[:MAX_KPIS]:
         if item.id in used or item.measure not in df or item.aggregation not in SUPPORTED_AGGREGATIONS:
             warnings.append(f"Rejected KPI definition `{item.id}`."); continue
         if item.aggregation not in {"count", "distinct_count"} and not _is_numeric(df, item.measure):
@@ -136,7 +171,7 @@ def _valid_plan(plan: KPITrendPlan, df: pd.DataFrame, prepared: dict[str, Any]) 
                 )
                 item = item.model_copy(update={"aggregation": expected})
         used.add(item.id); kpis.append(item)
-    for item in plan.trends[:MAX_TRENDS]:
+    for item in trends_to_validate[:MAX_TRENDS]:
         if item.id in used or item.measure not in df or item.date_column not in df or item.aggregation not in SUPPORTED_AGGREGATIONS or item.granularity not in SUPPORTED_GRANULARITIES:
             warnings.append(f"Rejected trend definition `{item.id}`."); continue
         if item.aggregation not in {"count", "distinct_count"} and not _is_numeric(df, item.measure):
@@ -152,16 +187,45 @@ def _valid_plan(plan: KPITrendPlan, df: pd.DataFrame, prepared: dict[str, Any]) 
                 )
                 item = item.model_copy(update={"aggregation": expected})
         used.add(item.id); trends.append(item)
-    return KPITrendPlan(kpis=kpis, trends=trends, limitations=plan.limitations), warnings
+    return kpis, trends, warnings
+
+
+async def _resolve_kpis(
+    prepared: dict[str, Any],
+    requests: list[KPIRequest],
+) -> tuple[list[KPIDefinition], list[str]]:
+    """Run every focused KPI request independently before pandas calculates it."""
+    definitions: list[KPIDefinition] = []
+    warnings: list[str] = []
+    responses = await asyncio.gather(
+        *[_request_kpi_value_definition(prepared, request) for request in requests[:MAX_KPIS]],
+        return_exceptions=True,
+    )
+    for request, response in zip(requests[:MAX_KPIS], responses, strict=True):
+        if isinstance(response, BaseException):
+            warnings.append(f"Could not resolve KPI `{request.id}`: {response}")
+            continue
+        definitions.append(
+            KPIDefinition(
+                id=request.id,
+                title=request.title,
+                measure=response.measure,
+                aggregation=response.aggregation,
+                dimension=response.dimension,
+                dimension_value=response.dimension_value,
+            )
+        )
+    return definitions, warnings
 
 
 def _ensure_core_definitions(
-    plan: KPITrendPlan,
+    kpis: list[KPIDefinition],
+    trends: list[TrendDefinition],
     prepared: dict[str, Any],
     df: pd.DataFrame,
-) -> KPITrendPlan:
+) -> tuple[list[KPIDefinition], list[TrendDefinition]]:
     """Guarantee useful KPI coverage and one forecast-aligned primary trend."""
-    kpis = list(plan.kpis)
+    kpis = list(kpis)
     used_measures = {item.measure for item in kpis}
     for measure in ranked_measures(prepared, df):
         if len(kpis) >= 4:
@@ -179,7 +243,7 @@ def _ensure_core_definitions(
         )
         used_measures.add(measure)
 
-    trends = list(plan.trends)
+    trends = list(trends)
     primary = select_primary_series(prepared, df)
     if primary:
         matching = next(
@@ -220,7 +284,7 @@ def _ensure_core_definitions(
                 if item.id != primary_trend.id and item is not matching
             ],
         ]
-    return plan.model_copy(update={"kpis": kpis[:MAX_KPIS], "trends": trends[:MAX_TRENDS]})
+    return kpis[:MAX_KPIS], trends[:MAX_TRENDS]
 
 
 def _aggregate(series: pd.Series, aggregation: str) -> float | int | None:
@@ -232,15 +296,42 @@ def _aggregate(series: pd.Series, aggregation: str) -> float | int | None:
     return round(value, 6) if math.isfinite(value) else None
 
 
+def _kpi_query(
+    item: KPIDefinition,
+    date_column: str | None,
+    current_period: str | None,
+    granularity: str,
+) -> str:
+    """Describe the exact deterministic operation used for a dashboard KPI."""
+    aggregation = {
+        "sum": "SUM",
+        "mean": "AVERAGE",
+        "median": "MEDIAN",
+        "count": "COUNT",
+        "distinct_count": "DISTINCT COUNT",
+        "min": "MINIMUM",
+        "max": "MAXIMUM",
+    }[item.aggregation]
+    measure = "all rows" if item.aggregation == "count" else f"`{item.measure}`"
+    query = f"{aggregation} of {measure}"
+    if item.dimension and item.dimension_value is not None:
+        query += f" where `{item.dimension}` is `{item.dimension_value}`"
+    if date_column and current_period:
+        query += f" for the latest {granularity} ({current_period})"
+    else:
+        query += " across all available records"
+    return query
+
+
 def _calculate_kpis(
     df: pd.DataFrame,
-    plan: KPITrendPlan,
+    definitions: list[KPIDefinition],
     prepared: dict[str, Any],
 ) -> list[KPIResult]:
     results: list[KPIResult] = []
     date_column = selected_date_column(prepared, df)
     granularity = selected_granularity(prepared)
-    for item in plan.kpis:
+    for item in definitions:
         source = df
         if item.dimension and item.dimension_value is not None:
             source = df[df[item.dimension].astype(str) == str(item.dimension_value)]
@@ -307,6 +398,12 @@ def _calculate_kpis(
                     raw_value=value,
                     aggregation=item.aggregation,
                     measure=item.measure,
+                    query=_kpi_query(
+                        item,
+                        date_column,
+                        current_period,
+                        granularity,
+                    ),
                     dimension=item.dimension,
                     current_period=current_period,
                     previous_period=previous_period,
@@ -320,9 +417,12 @@ def _calculate_kpis(
     return results
 
 
-def _calculate_trends(df: pd.DataFrame, plan: KPITrendPlan) -> tuple[list[TrendSeries], list[str]]:
+def _calculate_trends(
+    df: pd.DataFrame,
+    definitions: list[TrendDefinition],
+) -> tuple[list[TrendSeries], list[str]]:
     result: list[TrendSeries] = []; warnings: list[str] = []
-    for item in plan.trends:
+    for item in definitions:
         cols = [item.date_column, item.measure] + ([item.group_by] if item.group_by else [])
         data = df[cols].copy(); data[item.date_column] = pd.to_datetime(data[item.date_column], errors="coerce")
         data = data.dropna(subset=[item.date_column])
@@ -361,18 +461,34 @@ class KPITrendAgent:
         warnings: list[str] = []
         try:
             proposed = await _request_plan(prepared_dataset)
-            plan, validation_warnings = _valid_plan(proposed, df, prepared_dataset)
+            proposed_kpis, resolution_warnings = await _resolve_kpis(
+                prepared_dataset,
+                proposed.kpis,
+            )
+            kpi_definitions, trends, validation_warnings = _valid_plan(
+                proposed_kpis,
+                proposed.trends,
+                df,
+                prepared_dataset,
+            )
+            warnings.extend(resolution_warnings)
             warnings.extend(validation_warnings)
-            if not plan.kpis and not plan.trends:
+            if not kpi_definitions and not trends:
                 raise KPITrendError("LLM plan has no valid definitions.")
             execution_status: ModelExecutionStatus = "succeeded"
         except Exception as exc:
             warnings.append(f"{exc}")
-            plan = _fallback_plan(prepared_dataset, df)
+            kpi_definitions, trends, plan_limitations = _fallback_plan(prepared_dataset, df)
             execution_status = "fallback"
-        plan = _ensure_core_definitions(plan, prepared_dataset, df)
-        kpis = _calculate_kpis(df, plan, prepared_dataset)
-        trends, trend_warnings = _calculate_trends(df, plan)
+            proposed = KPITrendPlan(limitations=plan_limitations)
+        kpi_definitions, trends = _ensure_core_definitions(
+            kpi_definitions,
+            trends,
+            prepared_dataset,
+            df,
+        )
+        kpis = _calculate_kpis(df, kpi_definitions, prepared_dataset)
+        trends, trend_warnings = _calculate_trends(df, trends)
         warnings.extend(trend_warnings)
         return (
             KPITrendOutput(
@@ -382,7 +498,7 @@ class KPITrendAgent:
                 warnings=warnings,
                 limitations=[
                     *(prepared_dataset.get("limitations") or []),
-                    *plan.limitations,
+                    *proposed.limitations,
                 ],
             ),
             execution_status,

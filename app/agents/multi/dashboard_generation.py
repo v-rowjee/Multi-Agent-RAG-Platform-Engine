@@ -867,6 +867,7 @@ def _build_dashboard(
                     prepared,
                 ),
                 "rawValue": item.get("raw_value", item.get("value")),
+                "query": item.get("query") or None,
                 "indicator": {"kind": kind, "text": text},
             }
         )

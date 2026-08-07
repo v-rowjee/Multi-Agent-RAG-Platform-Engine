@@ -670,6 +670,10 @@ class BusinessIntelligenceAgent:
                     "title": f"{'Average' if average else 'Total'} {self._title(metric['name'])}",
                     "value": self._display(metric["name"], value),
                     "rawValue": value,
+                    "query": (
+                        f"{'AVERAGE' if average else 'SUM'} of "
+                        f"`{metric['name']}` across all available records"
+                    ),
                     "indicator": {"kind": kind, "text": text},
                 }
             )

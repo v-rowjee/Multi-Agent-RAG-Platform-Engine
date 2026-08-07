@@ -21,6 +21,7 @@ class Kpi(BaseModel):
     title: str = Field(min_length=1)
     value: str
     rawValue: str | float | int | None = None
+    query: str | None = Field(default=None, min_length=1)
     indicator: Indicator
 
 class TimelinePoint(BaseModel):
