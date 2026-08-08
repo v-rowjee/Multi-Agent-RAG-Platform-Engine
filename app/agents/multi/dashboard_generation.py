@@ -922,7 +922,8 @@ def _build_dashboard(
                         "critical": "critical",
                     }.get(anomaly.get("severity"), "info"),
                     "reason": str(
-                        anomaly.get("evidence")
+                        anomaly.get("business_interpretation")
+                        or anomaly.get("evidence")
                         or "Specialist anomaly result."
                     ),
                 }
@@ -974,7 +975,8 @@ def _build_dashboard(
                 f"Anomaly: {anomalies[item_id].get('metric', item_id)}"
             ),
             "description": str(
-                anomalies[item_id].get("evidence")
+                anomalies[item_id].get("business_interpretation")
+                or anomalies[item_id].get("evidence")
                 or "Specialist anomaly result."
             ),
             "severity": {

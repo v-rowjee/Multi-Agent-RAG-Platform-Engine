@@ -128,6 +128,21 @@ class AnomalyResult(StrictModel):
     severity: Literal["informational", "warning", "critical"]
     method: str
     evidence: str
+    business_interpretation: str | None = Field(default=None, max_length=240)
+
+
+class AnomalyInterpretation(StrictModel):
+    """A concise, grounded explanation of one detected observation."""
+
+    anomaly_id: str
+    business_interpretation: str = Field(min_length=1, max_length=240)
+
+
+class AnomalyInterpretationOutput(StrictModel):
+    interpretations: list[AnomalyInterpretation] = Field(
+        default_factory=list,
+        max_length=MAX_ANALYSES * 4,
+    )
 
 class AnomalyDetectionOutput(StrictModel):
     status: Literal["complete", "partial"] = "complete"
