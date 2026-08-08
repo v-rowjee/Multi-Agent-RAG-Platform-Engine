@@ -38,6 +38,7 @@ create table public.datasets (
     description text,
     row_count integer not null check (row_count >= 0),
     column_count integer not null check (column_count >= 0),
+    generic_cleaning_report jsonb not null default '{}'::jsonb,
     -- Retained for compatibility; analysis_sessions is authoritative.
     status text not null default 'processing'
         check (status in ('processing', 'ready', 'failed')),

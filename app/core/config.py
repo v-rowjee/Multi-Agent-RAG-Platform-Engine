@@ -96,7 +96,7 @@ class RagConfiguration:
 class Settings:
     supabase_url: str
     supabase_service_role_key: str
-    supabase_storage_bucket: str = "uploads"
+    supabase_storage_bucket: str = "datasets"
     bi_pipeline_mode: PipelineMode = "multi"
 
 
@@ -383,9 +383,9 @@ def get_settings() -> Settings:
         supabase_service_role_key=os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip(),
         supabase_storage_bucket=os.environ.get(
             "SUPABASE_STORAGE_BUCKET",
-            "uploads",
+            "datasets",
         ).strip()
-        or "uploads",
+        or "datasets",
         bi_pipeline_mode=runtime.pipeline_mode,
     )
 

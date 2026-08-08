@@ -134,7 +134,7 @@ class DashboardAssembler:
         summaries: list[dict[str, Any]] = []
         for index, dataset in enumerate(datasets):
             inspection = (
-                self.files.inspect_file(dataset.file_name, contents[index])
+                self.files.inspect_file(dataset.storage_path, contents[index])
                 if index < len(contents)
                 else DatasetInspection(
                     row_count=dataset.row_count or 0,

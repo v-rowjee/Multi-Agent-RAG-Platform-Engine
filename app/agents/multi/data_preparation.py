@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Any, Literal
 
 import pandas as pd
@@ -17,7 +16,6 @@ from app.schemas.data_preparation import (
     PreparationPlan,
     PreparedDatasetPackage,
 )
-from app.services.data.cleaning import _generic_clean_csv
 from app.services.data.preparation import (
     _dedupe,
     _deterministic_plan,
@@ -103,31 +101,20 @@ class DataPreparationAgent:
 
     async def run(
         self,
-        uploaded_file_path: str,
+        dataframe: pd.DataFrame,
         session_id: str,
+        generic_cleaning_report: GenericCleaningResult,
         business_description: str | None = None,
-        generic_cleaning_report: GenericCleaningResult | None = None,
         file_name: str | None = None,
-        output_dir: Path | None = None,
-    ) -> PreparedDatasetPackage:
+    ) -> tuple[PreparedDatasetPackage, pd.DataFrame]:
         logger.info(
-            "Data preparation started session_id=%s source_path=%s",
+            "Data preparation started session_id=%s",
             session_id,
-            uploaded_file_path,
         )
-        if output_dir is None:
-            raise DataPreparationError("A temporary processing workspace is required.")
-        output_dir.mkdir(parents=True, exist_ok=True)
-        if generic_cleaning_report is None:
-            df, cleaning_report = _generic_clean_csv(uploaded_file_path, output_dir)
-        else:
-            try:
-                df = pd.read_csv(uploaded_file_path, low_memory=False)
-            except Exception as exc:
-                raise DataPreparationError(
-                    f"Generic cleaned CSV could not be read: {exc}"
-                ) from exc
-            cleaning_report = generic_cleaning_report
+        if not isinstance(dataframe, pd.DataFrame):
+            raise DataPreparationError("A cleaned pandas DataFrame is required.")
+        df = dataframe.copy()
+        cleaning_report = generic_cleaning_report
         logger.info(
             "Generic cleaning completed session_id=%s original_shape=(%s,%s) cleaned_shape=(%s,%s) output=%s",
             session_id,
@@ -169,15 +156,13 @@ class DataPreparationAgent:
                 session_id,
             )
 
-        prepared, temporal_path, preparation_report = _execute_plan(
+        prepared, preparation_report = _execute_plan(
             df=df,
             plan=plan,
-            output_dir=output_dir,
             plan_source=plan_source,
             validation_warnings=[*planning_warnings, *validation_warnings],
             rejected_transformations=rejected,
         )
-        prepared_path = str(output_dir / "prepared_dataset.csv")
         prepared_profile = _profile_dataset(prepared, business_description)
         effective_granularity = _reconcile_temporal_capabilities(plan, prepared)
 
@@ -192,9 +177,7 @@ class DataPreparationAgent:
             ]
         )
         package = PreparedDatasetPackage(
-            prepared_file_path=prepared_path,
-            file_name=str(file_name or Path(uploaded_file_path).name),
-            temporal_dataset_path=temporal_path,
+            file_name=str(file_name or "dataset.csv"),
             dataset_profile=prepared_profile,
             currency=prepared_profile.currency,
             semantic_column_map=semantic_map,
@@ -214,13 +197,11 @@ class DataPreparationAgent:
             warnings=warnings,
         )
         logger.info(
-            "Data preparation completed session_id=%s prepared_path=%s temporal_path=%s capabilities=%s",
+            "Data preparation completed session_id=%s capabilities=%s",
             session_id,
-            package.prepared_file_path,
-            package.temporal_dataset_path,
             package.capability_flags.model_dump(mode="json"),
         )
-        return package
+        return package, prepared
 
 
 data_preparation_agent = DataPreparationAgent(enable_llm_enrichment=True)
@@ -228,39 +209,27 @@ data_preparation_agent = DataPreparationAgent(enable_llm_enrichment=True)
 
 async def data_preparation_node(state: dict[str, Any]) -> dict[str, Any]:
     session_id = str(state.get("session_id") or state.get("sessionId") or "").strip()
-    uploaded_file_path = str(
-        state.get("uploaded_file_path")
-        or state.get("upload_path")
-        or state.get("filePath")
-        or ""
-    ).strip()
     business_description = state.get("business_description") or state.get(
         "businessDescription"
     )
     file_name = state.get("file_name") or state.get("fileName")
-    working_directory = str(state.get("working_directory") or "").strip()
-
     if not session_id:
         raise DataPreparationError("state.session_id is required.")
-    if not uploaded_file_path:
-        raise DataPreparationError("state.uploaded_file_path is required.")
-    if not working_directory:
-        raise DataPreparationError("state.working_directory is required.")
+    dataframe = state.get("dataframe")
+    if not isinstance(dataframe, pd.DataFrame):
+        raise DataPreparationError("state.dataframe must be a pandas DataFrame.")
+    cleaning = state.get("generic_cleaning_report")
+    if not isinstance(cleaning, dict):
+        raise DataPreparationError("state.generic_cleaning_report is required.")
 
-    result = await data_preparation_agent.run(
-        uploaded_file_path=uploaded_file_path,
+    result, prepared_dataframe = await data_preparation_agent.run(
+        dataframe=dataframe,
         session_id=session_id,
         business_description=(
             str(business_description) if business_description else None
         ),
-        generic_cleaning_report=(
-            GenericCleaningResult.model_validate(state["generic_cleaning_report"])
-            if state.get("generic_cleaned_file_path")
-            and isinstance(state.get("generic_cleaning_report"), dict)
-            else None
-        ),
+        generic_cleaning_report=GenericCleaningResult.model_validate(cleaning),
         file_name=str(file_name) if file_name else None,
-        output_dir=Path(working_directory),
     )
 
     prepared_dataset = result.model_dump(mode="json")
@@ -272,10 +241,8 @@ async def data_preparation_node(state: dict[str, Any]) -> dict[str, Any]:
         prepared_dataset["source_datasets"] = source_datasets
 
     return {
-        "generic_cleaned_file_path": result.cleaning_report.cleaned_file_path,
-        "prepared_file_path": result.prepared_file_path,
-        "generic_cleaning_report": result.cleaning_report.model_dump(mode="json"),
         "prepared_dataset": prepared_dataset,
+        "prepared_dataframe": prepared_dataframe,
         "warnings": result.warnings,
         "completed_agents": ["data_preparation"],
         "model_invocations": [

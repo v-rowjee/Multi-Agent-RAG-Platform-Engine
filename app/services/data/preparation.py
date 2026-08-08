@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Literal
 
 import numpy as np
@@ -552,22 +551,13 @@ def _reconcile_temporal_capabilities(
         plan.time_series_candidates = measures[:3]
     return granularity
 
-def _save_csv(df: pd.DataFrame, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    output = df.copy()
-    for column in output.columns:
-        if pd.api.types.is_datetime64_any_dtype(output[column]):
-            output[column] = output[column].dt.strftime("%Y-%m-%dT%H:%M:%S")
-    output.to_csv(path, index=False)
-
 def _execute_plan(
     df: pd.DataFrame,
     plan: PreparationPlan,
-    output_dir: Path,
     plan_source: AgentProvider | Literal["deterministic"],
     validation_warnings: list[str],
     rejected_transformations: list[str],
-) -> tuple[pd.DataFrame, str | None, PreparationReport]:
+) -> tuple[pd.DataFrame, PreparationReport]:
     prepared = df.copy()
     temporal_mask = pd.Series(True, index=prepared.index)
     executed: list[str] = []
@@ -610,13 +600,6 @@ def _execute_plan(
             warnings.extend(formula_warnings)
             executed.append(f"Reconstructed {count} missing `{column}` values with `{transformation.formula_id}`.")
 
-    prepared_path = output_dir / "prepared_dataset.csv"
-    try:
-        _save_csv(prepared, prepared_path)
-    except Exception as exc:
-        raise DataPreparationError(f"Prepared dataset could not be saved: {exc}") from exc
-
-    temporal_path: str | None = None
     temporal_excluded = 0
     if plan.date_column and plan.date_column in prepared.columns:
         parsed_dates = _parse_dates_for_column(prepared[plan.date_column], plan.date_column)
@@ -625,12 +608,6 @@ def _execute_plan(
         temporal_excluded = int(len(prepared) - len(temporal))
         if not temporal.empty:
             temporal[plan.date_column] = parsed_dates.loc[temporal.index]
-            temporal_file = output_dir / "prepared_temporal_dataset.csv"
-            try:
-                _save_csv(temporal, temporal_file)
-                temporal_path = str(temporal_file)
-            except Exception as exc:
-                warnings.append(f"Temporal dataset could not be saved: {exc}")
 
     report = PreparationReport(
         plan_source=plan_source,
@@ -640,7 +617,7 @@ def _execute_plan(
         excluded_from_temporal_analysis_rows=temporal_excluded,
         warnings=warnings,
     )
-    return prepared, temporal_path, report
+    return prepared, report
 
 def _apply_formula(df: pd.DataFrame, transformation: PreparationTransformation) -> tuple[int, list[str]]:
     warnings: list[str] = []

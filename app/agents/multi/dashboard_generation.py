@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -829,34 +828,29 @@ def _build_dashboard(
     dashboard_kpis = []
     for item_id in selected_kpis:
         item = kpis[item_id]
-        change = item.get("baseline_change_percent")
-        if not isinstance(change, (float, int)):
-            change = item.get("change_percent")
-        baseline_label = _period_label(
-            item.get("baseline_period") or item.get("previous_period"),
-            (kpi_output or {}).get("trends", [{}])[0].get("granularity")
-            if (kpi_output or {}).get("trends")
-            else None,
-        )
-        current_label = _period_label(
-            item.get("current_period"),
-            (kpi_output or {}).get("trends", [{}])[0].get("granularity")
-            if (kpi_output or {}).get("trends")
-            else None,
-        )
-        comparison_range = (
-            f"from {baseline_label} to {current_label}"
-            if item.get("baseline_period") and item.get("current_period")
-            else f"vs {baseline_label}"
-        )
-        if isinstance(change, (float, int)) and change > 0:
-            kind, text = "increase", f"+{float(change):.1f}% {comparison_range}"
-        elif isinstance(change, (float, int)) and change < 0:
-            kind, text = "decrease", f"{float(change):.1f}% {comparison_range}"
-        elif change == 0:
-            kind, text = "note", f"0.0% {comparison_range}"
-        else:
-            kind, text = "note", "No previous-period comparison"
+        kind = item.get("trend_kind")
+        text = item.get("trend_text")
+        if item.get("value_source") != "llm_fallback":
+            change = item.get("baseline_change_percent")
+            has_baseline = isinstance(change, (float, int))
+            if not has_baseline:
+                change = item.get("change_percent")
+            baseline_label = _period_label(
+                item.get("baseline_period") or item.get("previous_period"),
+                (kpi_output or {}).get("trends", [{}])[0].get("granularity")
+                if (kpi_output or {}).get("trends")
+                else None,
+            )
+            if isinstance(change, (float, int)) and change > 0:
+                kind, text = "increase", f"Increased by {float(change):.1f}% since {baseline_label}"
+            elif isinstance(change, (float, int)) and change < 0:
+                kind, text = "decrease", f"Decreased by {abs(float(change)):.1f}% since {baseline_label}"
+            elif change == 0:
+                kind, text = "note", f"Unchanged since {baseline_label}"
+            else:
+                kind, text = "note", "No previous-period comparison"
+        elif kind not in {"increase", "decrease", "note"} or not isinstance(text, str):
+            kind, text = "note", "LLM fallback value"
         dashboard_kpis.append(
             {
                 "id": item_id,
@@ -1149,6 +1143,7 @@ class DashboardGenerationAgent:
     async def run(
         self,
         prepared_dataset: dict[str, Any],
+        dataframe: pd.DataFrame,
         kpi_trend_output: dict[str, Any] | None,
         anomaly_output: dict[str, Any] | None,
         forecasting_output: dict[str, Any] | None,
@@ -1156,6 +1151,7 @@ class DashboardGenerationAgent:
     ) -> DashboardGenerationOutput:
         result, _, _ = await self.run_with_status(
             prepared_dataset,
+            dataframe,
             kpi_trend_output,
             anomaly_output,
             forecasting_output,
@@ -1166,6 +1162,7 @@ class DashboardGenerationAgent:
     async def run_with_status(
         self,
         prepared_dataset: dict[str, Any],
+        dataframe: pd.DataFrame,
         kpi_trend_output: dict[str, Any] | None,
         anomaly_output: dict[str, Any] | None,
         forecasting_output: dict[str, Any] | None,
@@ -1177,10 +1174,9 @@ class DashboardGenerationAgent:
         synthesis = (
             synthesis_output if isinstance(synthesis_output, dict) else {}
         )
-        path = Path(str(prepared.get("prepared_file_path") or ""))
-        if not path.is_file():
-            raise RuntimeError("Prepared dataset is unavailable for dashboard generation.")
-        df = pd.read_csv(path, low_memory=False)
+        if not isinstance(dataframe, pd.DataFrame):
+            raise RuntimeError("A prepared pandas DataFrame is required for dashboard generation.")
+        df = dataframe.copy()
         kpis = (kpi_trend_output or {}).get("kpis", [])
         trends = (kpi_trend_output or {}).get("trends", [])
         anomalies = (anomaly_output or {}).get("anomalies", [])
@@ -1278,6 +1274,7 @@ async def dashboard_generation_node(state: dict[str, Any]) -> dict[str, Any]:
     )
     result, execution_status, failure_reason = await dashboard_generation_agent.run_with_status(
         prepared,
+        state.get("prepared_dataframe"),
         state.get("kpi_trend_output"),
         state.get("anomaly_output"),
         state.get("forecasting_output"),

@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import ast
 import math
 import re
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -33,23 +33,25 @@ from app.services.data.series import (
     selected_granularity,
 )
 
-MAX_KPIS = 8
+MAX_KPIS = 4
 MAX_TRENDS = 3
 MAX_TREND_SERIES = 10
 SUPPORTED_AGGREGATIONS = {"sum", "mean", "median", "count", "distinct_count", "min", "max"}
 SUPPORTED_GRANULARITIES = {"day", "week", "month", "quarter", "year"}
+PANDAS_AGGREGATIONS = {
+    "sum": "sum",
+    "mean": "mean",
+    "median": "median",
+    "count": "count",
+    "nunique": "distinct_count",
+    "min": "min",
+    "max": "max",
+}
 
 
 class KPITrendError(RuntimeError):
     pass
 
-
-def _path(prepared: dict[str, Any]) -> Path:
-    value = prepared.get("prepared_file_path")
-    path = Path(str(value or ""))
-    if not path.is_file():
-        raise KPITrendError("prepared_dataset must contain an existing prepared CSV path.")
-    return path
 
 
 def _columns_metadata(prepared: dict[str, Any]) -> list[dict[str, Any]]:
@@ -80,7 +82,7 @@ async def _request_plan(prepared: dict[str, Any]) -> KPITrendPlan:
         "multi/kpi_trend",
         payload=_planning_payload(prepared),
     )
-    return await request_structured(
+    plan = await request_structured(
         policy=agent_model_policy("kpi_trend"),
         response_model=KPITrendPlan,
         schema_name="kpi_trend_plan",
@@ -89,6 +91,11 @@ async def _request_plan(prepared: dict[str, Any]) -> KPITrendPlan:
             {"role": "user", "content": prompts.user},
         ],
     )
+    if len(plan.kpis) != MAX_KPIS:
+        raise KPITrendError(
+            f"The KPI plan must contain exactly {MAX_KPIS} KPI requests."
+        )
+    return plan
 
 
 async def _request_kpi_value_definition(
@@ -129,12 +136,116 @@ def _fallback_aggregation(measure: str) -> str:
     return aggregation_for_measure(measure)
 
 
+def _pandas_query(
+    measure: str,
+    aggregation: str,
+    dimension: str | None = None,
+    dimension_value: str | int | float | bool | None = None,
+) -> str:
+    """Create a query using the only scalar pandas shapes the executor accepts."""
+    operation = "nunique" if aggregation == "distinct_count" else aggregation
+    measure_ref = repr(measure)
+    if dimension and dimension_value is not None:
+        return (
+            f"df.loc[df[{dimension!r}] == {dimension_value!r}, {measure_ref}]"
+            f".{operation}()"
+        )
+    return f"df[{measure_ref}].{operation}()"
+
+
+def _column_reference(node: ast.AST) -> str | None:
+    if not (
+        isinstance(node, ast.Subscript)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "df"
+        and isinstance(node.slice, ast.Constant)
+        and isinstance(node.slice.value, str)
+    ):
+        return None
+    return node.slice.value
+
+
+def _filtered_query_source(
+    node: ast.AST,
+) -> tuple[str, str, str | int | float | bool] | None:
+    if not (
+        isinstance(node, ast.Subscript)
+        and isinstance(node.value, ast.Attribute)
+        and node.value.attr == "loc"
+        and isinstance(node.value.value, ast.Name)
+        and node.value.value.id == "df"
+        and isinstance(node.slice, ast.Tuple)
+        and len(node.slice.elts) == 2
+    ):
+        return None
+    predicate, measure_node = node.slice.elts
+    measure = measure_node.value if isinstance(measure_node, ast.Constant) and isinstance(measure_node.value, str) else None
+    if not (
+        measure
+        and isinstance(predicate, ast.Compare)
+        and len(predicate.ops) == len(predicate.comparators) == 1
+        and isinstance(predicate.ops[0], ast.Eq)
+    ):
+        return None
+    dimension = _column_reference(predicate.left)
+    value_node = predicate.comparators[0]
+    if not (
+        dimension
+        and isinstance(value_node, ast.Constant)
+        and isinstance(value_node.value, (str, int, float, bool))
+    ):
+        return None
+    return measure, dimension, value_node.value
+
+
+def _parse_pandas_query(
+    query: str,
+    df: pd.DataFrame,
+) -> tuple[str, str, str | None, str | int | float | bool | None] | None:
+    """Validate the small, non-executable pandas expression language we support."""
+    try:
+        expression = ast.parse(query, mode="eval").body
+    except (SyntaxError, TypeError):
+        return None
+    if not (
+        isinstance(expression, ast.Call)
+        and not expression.args
+        and not expression.keywords
+        and isinstance(expression.func, ast.Attribute)
+        and expression.func.attr in PANDAS_AGGREGATIONS
+    ):
+        return None
+    measure = _column_reference(expression.func.value)
+    dimension: str | None = None
+    dimension_value: str | int | float | bool | None = None
+    if measure is None:
+        filtered = _filtered_query_source(expression.func.value)
+        if filtered is None:
+            return None
+        measure, dimension, dimension_value = filtered
+    if measure not in df or (dimension is not None and dimension not in df):
+        return None
+    aggregation = PANDAS_AGGREGATIONS[expression.func.attr]
+    if aggregation not in {"count", "distinct_count"} and not _is_numeric(df, measure):
+        return None
+    return measure, aggregation, dimension, dimension_value
+
+
 def _fallback_plan(
     prepared: dict[str, Any],
     df: pd.DataFrame,
 ) -> tuple[list[KPIDefinition], list[TrendDefinition], list[str]]:
     measures = ranked_measures(prepared, df)
-    kpis = [KPIDefinition(id=f"kpi_{_slug(measure)}", title=f"{_fallback_aggregation(measure).title()} {measure.replace('_', ' ').title()}", measure=measure, aggregation=_fallback_aggregation(measure)) for measure in measures[:4]]
+    kpis = [
+        KPIDefinition(
+            id=f"kpi_{_slug(measure)}",
+            title=f"{_fallback_aggregation(measure).title()} {measure.replace('_', ' ').title()}",
+            query=_pandas_query(measure, _fallback_aggregation(measure)),
+            measure=measure,
+            aggregation=_fallback_aggregation(measure),
+        )
+        for measure in measures[:4]
+    ]
     date = selected_date_column(prepared, df)
     primary = select_primary_series(prepared, df)
     trends = []
@@ -156,20 +267,35 @@ def _valid_plan(
     trends: list[TrendDefinition] = []
     used: set[str] = set()
     for item in kpi_definitions[:MAX_KPIS]:
-        if item.id in used or item.measure not in df or item.aggregation not in SUPPORTED_AGGREGATIONS:
-            warnings.append(f"Rejected KPI definition `{item.id}`."); continue
-        if item.aggregation not in {"count", "distinct_count"} and not _is_numeric(df, item.measure):
-            warnings.append(f"Rejected KPI `{item.id}` because its measure is not numeric."); continue
-        if item.dimension and (item.dimension not in df or df[item.dimension].nunique(dropna=True) > MAX_TREND_SERIES):
-            warnings.append(f"Rejected KPI `{item.id}` because its dimension is invalid or high-cardinality."); continue
-        if item.aggregation not in {"count", "distinct_count"}:
-            expected = aggregation_for_measure(item.measure)
-            if item.aggregation != expected:
-                warnings.append(
-                    f"Adjusted KPI `{item.id}` aggregation from "
-                    f"`{item.aggregation}` to `{expected}`."
-                )
-                item = item.model_copy(update={"aggregation": expected})
+        parsed = _parse_pandas_query(item.query, df)
+        if item.id in used:
+            warnings.append(f"Rejected duplicate KPI definition `{item.id}`."); continue
+        if parsed is None:
+            warnings.append(
+                f"Pandas query for KPI `{item.id}` could not be validated; "
+                "its LLM fallback value will be used."
+            )
+            used.add(item.id)
+            kpis.append(item.model_copy(update={"query_valid": False}))
+            continue
+        measure, aggregation, dimension, dimension_value = parsed
+        if dimension and df[dimension].nunique(dropna=True) > MAX_TREND_SERIES:
+            warnings.append(
+                f"Pandas query for KPI `{item.id}` has a high-cardinality "
+                "filter; its LLM fallback value will be used."
+            )
+            used.add(item.id)
+            kpis.append(item.model_copy(update={"query_valid": False}))
+            continue
+        item = item.model_copy(
+            update={
+                "query_valid": True,
+                "measure": measure,
+                "aggregation": aggregation,
+                "dimension": dimension,
+                "dimension_value": dimension_value,
+            }
+        )
         used.add(item.id); kpis.append(item)
     for item in trends_to_validate[:MAX_TRENDS]:
         if item.id in used or item.measure not in df or item.date_column not in df or item.aggregation not in SUPPORTED_AGGREGATIONS or item.granularity not in SUPPORTED_GRANULARITIES:
@@ -208,11 +334,17 @@ async def _resolve_kpis(
         definitions.append(
             KPIDefinition(
                 id=request.id,
-                title=request.title,
-                measure=response.measure,
-                aggregation=response.aggregation,
-                dimension=response.dimension,
-                dimension_value=response.dimension_value,
+                title=(
+                    response.title
+                    if response.title == request.title
+                    else request.title
+                ),
+                query=response.query,
+                fallback_value=response.fallback_value,
+                trend_kind=response.trend_kind,
+                trend_text=response.trend_text,
+                measure="",
+                aggregation="",
             )
         )
     return definitions, warnings
@@ -237,6 +369,7 @@ def _ensure_core_definitions(
             KPIDefinition(
                 id=f"kpi_{_slug(measure)}",
                 title=f"{aggregation.title()} {measure.replace('_', ' ').title()}",
+                query=_pandas_query(measure, aggregation),
                 measure=measure,
                 aggregation=aggregation,
             )
@@ -296,42 +429,37 @@ def _aggregate(series: pd.Series, aggregation: str) -> float | int | None:
     return round(value, 6) if math.isfinite(value) else None
 
 
-def _kpi_query(
-    item: KPIDefinition,
-    date_column: str | None,
-    current_period: str | None,
-    granularity: str,
-) -> str:
-    """Describe the exact deterministic operation used for a dashboard KPI."""
-    aggregation = {
-        "sum": "SUM",
-        "mean": "AVERAGE",
-        "median": "MEDIAN",
-        "count": "COUNT",
-        "distinct_count": "DISTINCT COUNT",
-        "min": "MINIMUM",
-        "max": "MAXIMUM",
-    }[item.aggregation]
-    measure = "all rows" if item.aggregation == "count" else f"`{item.measure}`"
-    query = f"{aggregation} of {measure}"
-    if item.dimension and item.dimension_value is not None:
-        query += f" where `{item.dimension}` is `{item.dimension_value}`"
-    if date_column and current_period:
-        query += f" for the latest {granularity} ({current_period})"
-    else:
-        query += " across all available records"
-    return query
-
-
 def _calculate_kpis(
     df: pd.DataFrame,
     definitions: list[KPIDefinition],
     prepared: dict[str, Any],
-) -> list[KPIResult]:
+) -> tuple[list[KPIResult], list[str]]:
     results: list[KPIResult] = []
+    warnings: list[str] = []
     date_column = selected_date_column(prepared, df)
     granularity = selected_granularity(prepared)
     for item in definitions:
+        if not item.query_valid:
+            if item.fallback_value is None:
+                warnings.append(
+                    f"KPI `{item.id}` has no usable query or LLM fallback value."
+                )
+                continue
+            results.append(
+                KPIResult(
+                    id=item.id,
+                    title=item.title,
+                    value=item.fallback_value,
+                    raw_value=item.fallback_value,
+                    aggregation=item.aggregation or "llm_fallback",
+                    measure=item.measure,
+                    query=item.query,
+                    trend_kind=item.trend_kind,
+                    trend_text=item.trend_text,
+                    value_source="llm_fallback",
+                )
+            )
+            continue
         source = df
         if item.dimension and item.dimension_value is not None:
             source = df[df[item.dimension].astype(str) == str(item.dimension_value)]
@@ -389,32 +517,40 @@ def _calculate_kpis(
                         change_percent = 0.0
         if value is None:
             value = _aggregate(source[item.measure], item.aggregation)
-        if value is not None:
-            results.append(
-                KPIResult(
-                    id=item.id,
-                    title=item.title,
-                    value=value,
-                    raw_value=value,
-                    aggregation=item.aggregation,
-                    measure=item.measure,
-                    query=_kpi_query(
-                        item,
-                        date_column,
-                        current_period,
-                        granularity,
-                    ),
-                    dimension=item.dimension,
-                    current_period=current_period,
-                    previous_period=previous_period,
-                    previous_value=previous_value,
-                    change_percent=change_percent,
-                    baseline_period=baseline_period,
-                    baseline_value=baseline_value,
-                    baseline_change_percent=baseline_change_percent,
-                )
+        if value is None and item.fallback_value is not None:
+            warnings.append(
+                f"Pandas could not calculate KPI `{item.id}`; its LLM fallback value was used."
             )
-    return results
+            value = item.fallback_value
+            value_source = "llm_fallback"
+        elif value is not None:
+            value_source = "pandas"
+        else:
+            warnings.append(f"KPI `{item.id}` could not be calculated.")
+            continue
+        results.append(
+            KPIResult(
+                id=item.id,
+                title=item.title,
+                value=value,
+                raw_value=value,
+                aggregation=item.aggregation,
+                measure=item.measure,
+                query=item.query,
+                dimension=item.dimension,
+                current_period=current_period,
+                previous_period=previous_period,
+                previous_value=previous_value,
+                change_percent=change_percent,
+                baseline_period=baseline_period,
+                baseline_value=baseline_value,
+                baseline_change_percent=baseline_change_percent,
+                trend_kind=item.trend_kind,
+                trend_text=item.trend_text,
+                value_source=value_source,
+            )
+        )
+    return results, warnings
 
 
 def _calculate_trends(
@@ -439,17 +575,22 @@ def _calculate_trends(
 
 
 class KPITrendAgent:
-    async def run(self, prepared_dataset: dict[str, Any]) -> KPITrendOutput:
-        result, _ = await self.run_with_status(prepared_dataset)
+    async def run(
+        self, prepared_dataset: dict[str, Any], dataframe: pd.DataFrame
+    ) -> KPITrendOutput:
+        result, _ = await self.run_with_status(prepared_dataset, dataframe)
         return result
 
     async def run_with_status(
         self,
         prepared_dataset: dict[str, Any],
+        dataframe: pd.DataFrame,
     ) -> tuple[KPITrendOutput, ModelExecutionStatus]:
         if not isinstance(prepared_dataset, dict):
             raise KPITrendError("prepared_dataset must be a dictionary.")
-        df = pd.read_csv(_path(prepared_dataset), low_memory=False)
+        if not isinstance(dataframe, pd.DataFrame):
+            raise KPITrendError("A prepared pandas DataFrame is required.")
+        df = dataframe.copy()
         if df.empty:
             return (
                 KPITrendOutput(
@@ -487,7 +628,12 @@ class KPITrendAgent:
             prepared_dataset,
             df,
         )
-        kpis = _calculate_kpis(df, kpi_definitions, prepared_dataset)
+        kpis, calculation_warnings = _calculate_kpis(
+            df,
+            kpi_definitions,
+            prepared_dataset,
+        )
+        warnings.extend(calculation_warnings)
         trends, trend_warnings = _calculate_trends(df, trends)
         warnings.extend(trend_warnings)
         return (
@@ -511,7 +657,7 @@ kpi_trend_agent = KPITrendAgent()
 async def kpi_trend_node(state: dict[str, Any]) -> dict[str, Any]:
     try:
         result, execution_status = await kpi_trend_agent.run_with_status(
-            state.get("prepared_dataset", {})
+            state.get("prepared_dataset", {}), state.get("prepared_dataframe")
         )
     except KPITrendError as exc:
         result = KPITrendOutput(status="partial", limitations=[str(exc)])

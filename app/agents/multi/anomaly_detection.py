@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 from typing import Any, Literal
 
 import pandas as pd
@@ -43,11 +42,6 @@ PERCENT_WARNING = 20.0
 class AnomalyDetectionError(RuntimeError):
     pass
 
-
-def _path(prepared: dict[str, Any]) -> Path:
-    path = Path(str(prepared.get("prepared_file_path") or ""))
-    if not path.is_file(): raise AnomalyDetectionError("prepared_dataset must contain an existing prepared CSV path.")
-    return path
 
 
 def _frequency(granularity: str) -> str:
@@ -234,17 +228,22 @@ def _detect(item: AnomalyDefinition, values: pd.Series, group: str | None = None
 
 
 class AnomalyDetectionAgent:
-    async def run(self, prepared_dataset: dict[str, Any]) -> AnomalyDetectionOutput:
-        result, _, _ = await self.run_with_status(prepared_dataset)
+    async def run(
+        self, prepared_dataset: dict[str, Any], dataframe: pd.DataFrame
+    ) -> AnomalyDetectionOutput:
+        result, _, _ = await self.run_with_status(prepared_dataset, dataframe)
         return result
 
     async def run_with_status(
         self,
         prepared_dataset: dict[str, Any],
+        dataframe: pd.DataFrame,
     ) -> tuple[AnomalyDetectionOutput, ModelExecutionStatus, str | None]:
         if not isinstance(prepared_dataset, dict):
             raise AnomalyDetectionError("prepared_dataset must be a dictionary.")
-        df = pd.read_csv(_path(prepared_dataset), low_memory=False)
+        if not isinstance(dataframe, pd.DataFrame):
+            raise AnomalyDetectionError("A prepared pandas DataFrame is required.")
+        df = dataframe.copy()
         warnings: list[str] = []
         try:
             proposed = await _request_plan(prepared_dataset)
@@ -293,7 +292,7 @@ anomaly_detection_agent = AnomalyDetectionAgent()
 async def anomaly_detection_node(state: dict[str, Any]) -> dict[str, Any]:
     try:
         result, execution_status, failure_reason = await anomaly_detection_agent.run_with_status(
-            state.get("prepared_dataset", {})
+            state.get("prepared_dataset", {}), state.get("prepared_dataframe")
         )
     except AnomalyDetectionError as exc:
         result = AnomalyDetectionOutput(status="partial", limitations=[str(exc)])

@@ -135,34 +135,18 @@ def _infer_column_type(series: pd.Series, column: str) -> str:
         return "categorical"
     return "text"
 
-def _generic_clean_csv(uploaded_file_path: str, output_dir: Path) -> tuple[pd.DataFrame, GenericCleaningResult]:
-    """Clean a supported uploaded dataset and normalise it to CSV.
+def generic_clean_dataframe(
+    dataframe: pd.DataFrame,
+    *,
+    cleaned_file_path: str = "",
+) -> tuple[pd.DataFrame, GenericCleaningResult]:
+    """Return a generically cleaned copy of ``dataframe``.
 
-    The historical function name is retained because it is an internal import
-    used by the orchestration layer.  Multi-agent uploads may arrive as CSV or
-    XLSX, while every downstream preparation/specialist node consumes the
-    cleaned CSV emitted here.
+    This is the canonical cleaning path.  Files are only an ingestion and
+    storage concern; all cleaning and analysis work is performed with pandas
+    DataFrames.
     """
-    path = Path(uploaded_file_path)
-    if not path.is_file():
-        raise DataPreparationError(f"Uploaded file was not found: {uploaded_file_path}")
-    suffix = path.suffix.lower()
-    if suffix not in {".csv", ".xlsx"}:
-        raise DataPreparationError(
-            "The data preparation agent accepts CSV and XLSX files only."
-        )
-
-    try:
-        original = (
-            pd.read_csv(path, low_memory=False)
-            if suffix == ".csv"
-            else pd.read_excel(path)
-        )
-    except Exception as exc:
-        raise DataPreparationError(
-            f"{suffix.removeprefix('.').upper()} could not be read: {exc}"
-        ) from exc
-
+    original = dataframe.copy()
     original_rows, original_columns = original.shape
     warnings: list[str] = []
     errors: list[str] = []
@@ -200,14 +184,8 @@ def _generic_clean_csv(uploaded_file_path: str, output_dir: Path) -> tuple[pd.Da
         str(column): _infer_column_type(df[column], str(column)) for column in df.columns
     }
 
-    cleaned_path = output_dir / "generic_cleaned_dataset.csv"
-    try:
-        _save_csv(df, cleaned_path)
-    except Exception as exc:
-        raise DataPreparationError(f"Generic cleaned dataset could not be saved: {exc}") from exc
-
-    report = GenericCleaningResult(
-        cleaned_file_path=str(cleaned_path),
+    return df, GenericCleaningResult(
+        cleaned_file_path=cleaned_file_path,
         original_row_count=int(original_rows),
         cleaned_row_count=int(len(df)),
         original_column_count=int(original_columns),
@@ -220,4 +198,35 @@ def _generic_clean_csv(uploaded_file_path: str, output_dir: Path) -> tuple[pd.Da
         warnings=warnings,
         errors=errors,
     )
+
+
+def _generic_clean_csv(uploaded_file_path: str, output_dir: Path) -> tuple[pd.DataFrame, GenericCleaningResult]:
+    """Compatibility wrapper for legacy callers that still provide a CSV path."""
+    path = Path(uploaded_file_path)
+    if not path.is_file():
+        raise DataPreparationError(f"Uploaded file was not found: {uploaded_file_path}")
+    suffix = path.suffix.lower()
+    if suffix not in {".csv", ".xlsx"}:
+        raise DataPreparationError(
+            "The data preparation agent accepts CSV and XLSX files only."
+        )
+
+    try:
+        original = (
+            pd.read_csv(path, low_memory=False)
+            if suffix == ".csv"
+            else pd.read_excel(path)
+        )
+    except Exception as exc:
+        raise DataPreparationError(
+            f"{suffix.removeprefix('.').upper()} could not be read: {exc}"
+        ) from exc
+
+    cleaned_path = output_dir / "generic_cleaned_dataset.csv"
+    try:
+        df, report = generic_clean_dataframe(original, cleaned_file_path=str(cleaned_path))
+        _save_csv(df, cleaned_path)
+    except Exception as exc:
+        raise DataPreparationError(f"Generic cleaned dataset could not be saved: {exc}") from exc
+
     return df, report

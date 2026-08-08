@@ -21,12 +21,11 @@ from app.services.persistence.analysis import DatasetRecord
 
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MAX_UPLOAD_FILES = 5
-ALLOWED_EXTENSIONS = {".csv", ".xlsx"}
+ALLOWED_EXTENSIONS = {".csv"}
+PARQUET_MIME_TYPE = "application/vnd.apache.parquet"
 ALLOWED_MIME_TYPES = {
     "text/csv",
     "application/csv",
-    "application/vnd.ms-excel",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 }
 
 
@@ -60,10 +59,10 @@ class DatasetFileService:
         extension: str | None = None,
     ) -> None:
         extension = extension or Path(file_name).suffix.lower()
-        if not file_name or file_name in {".csv", ".xlsx"}:
+        if not file_name or file_name == ".csv":
             raise InvalidUploadError("The uploaded file must have a valid name.")
         if extension not in ALLOWED_EXTENSIONS:
-            raise InvalidUploadError("Only CSV and XLSX files are supported.")
+            raise InvalidUploadError("Only CSV files are supported.")
         if mime_type and mime_type not in ALLOWED_MIME_TYPES:
             raise InvalidUploadError("The uploaded file type is not supported.")
 
@@ -86,10 +85,17 @@ class DatasetFileService:
     ) -> pd.DataFrame:
         suffix = Path(file_name).suffix.lower()
         try:
+            # Dataset display names retain the user's original extension.  Use
+            # Parquet's magic bytes as a compatibility fallback for callers
+            # that supply that display name with stored Parquet content.
+            if content[:4] == b"PAR1":
+                return pd.read_parquet(io.BytesIO(content))
             if suffix == ".csv":
                 return pd.read_csv(io.BytesIO(content), low_memory=False)
             if suffix == ".xlsx":
                 return pd.read_excel(io.BytesIO(content))
+            if suffix == ".parquet":
+                return pd.read_parquet(io.BytesIO(content))
             raise InvalidUploadError("Only CSV and XLSX files are supported.")
         except UnicodeDecodeError as error:
             raise InvalidUploadError("The CSV file must use UTF-8 encoding.") from error
@@ -98,12 +104,23 @@ class DatasetFileService:
         except Exception as error:
             raise InvalidUploadError(parse_error) from error
 
+    @staticmethod
+    def dataframe_to_parquet(frame: pd.DataFrame) -> bytes:
+        output = io.BytesIO()
+        frame.to_parquet(output, index=False)
+        return output.getvalue()
+
     def inspect_file(self, file_name: str, content: bytes) -> DatasetInspection:
-        frame = self.read_dataframe(
+        return self.inspect_dataframe(
+            self.read_dataframe(
             file_name,
             content,
             parse_error="The uploaded file could not be parsed.",
+            )
         )
+
+    @staticmethod
+    def inspect_dataframe(frame: pd.DataFrame) -> DatasetInspection:
         row_count = int(len(frame))
         column_count = int(len(frame.columns))
         missing = int(frame.isna().sum().sum())
@@ -118,12 +135,16 @@ class DatasetFileService:
             str(column)
             for column in frame.select_dtypes(include="number").columns
         ]
-        profile = _profile_dataset(frame, None)
-        time_field = profile.candidate_date_columns[0] if profile.candidate_date_columns else None
+        profile = _profile_dataset(frame, None) if not frame.empty else None
+        time_field = (
+            profile.candidate_date_columns[0]
+            if profile and profile.candidate_date_columns
+            else None
+        )
         time_profile = next(
             (item for item in profile.column_profiles if item.name == time_field),
             None,
-        )
+        ) if profile else None
         return DatasetInspection(
             row_count=row_count,
             column_count=column_count,
@@ -188,6 +209,10 @@ class DatasetFileService:
                     skiprows=range(1, start_row + 1) if start_row else None,
                     nrows=page_size,
                 )
+            elif suffix == ".parquet":
+                frame = pd.read_parquet(io.BytesIO(content)).iloc[
+                    start_row : start_row + page_size
+                ]
             else:
                 raise InvalidUploadError("Only CSV and XLSX files are supported.")
         except UnicodeDecodeError as error:
@@ -256,13 +281,16 @@ class DatasetFileService:
         dataset: DatasetRecord,
         content: bytes,
     ) -> Iterator[tuple[BusinessIntelligenceAgentInput, Path]]:
-        suffix = Path(dataset.file_name).suffix.lower()
         with tempfile.TemporaryDirectory(prefix="bi_dataset_") as directory:
             root = Path(directory)
-            path = root / dataset.file_name
-            if path.suffix.lower() != suffix:
-                path = root / f"dataset{suffix}"
-            path.write_bytes(content)
+            # Uploaded objects are stored as Parquet. Agents still consume a
+            # temporary CSV, preserving their established on-disk contract.
+            path = root / "dataset.csv"
+            self.read_dataframe(dataset.storage_path, content).to_csv(
+                path,
+                index=False,
+                lineterminator="\n",
+            )
             workspace = root / "processing"
             workspace.mkdir()
             yield (

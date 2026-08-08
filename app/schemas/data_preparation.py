@@ -231,9 +231,9 @@ class PreparationReport(StrictModel):
 
 
 class PreparedDatasetPackage(StrictModel):
-    prepared_file_path: str
+    prepared_file_path: str | None = None
     file_name: str
-    temporal_dataset_path: str | None
+    temporal_dataset_path: str | None = None
     dataset_profile: DatasetProfile
     currency: str | None = None
     semantic_column_map: dict[str, str] = Field(default_factory=dict)

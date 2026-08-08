@@ -25,7 +25,11 @@ from app.agents.multi.orchestrator import (
 )
 from app.core.config import configured_agent_models
 from app.schemas.orchestration import AgentDecision, OrchestrationPlan
-from app.schemas.specialists import KPIRequest, KPITrendPlan, KPIValueDefinition
+from app.schemas.specialists import (
+    KPIRequest,
+    KPITrendPlan,
+    KPIValueDefinition,
+)
 from app.services.data.cleaning import _generic_clean_csv
 from app.services.data.series import (
     aggregation_for_measure,
@@ -149,7 +153,7 @@ def test_kpis_use_latest_period_and_percentage_change(
         no_llm,
     )
     result, execution_status = asyncio.run(
-        KPITrendAgent().run_with_status(prepared)
+        KPITrendAgent().run_with_status(prepared, _rows())
     )
     revenue = next(item for item in result.kpis if item.measure == "net_revenue_gbp")
 
@@ -184,6 +188,16 @@ def test_kpi_title_requests_are_resolved_independently_before_calculation(
             title="Latest Profit",
             prompt="Show the latest-period profit.",
         ),
+        KPIRequest(
+            id="kpi_quantity",
+            title="Latest Quantity",
+            prompt="Show the latest-period quantity.",
+        ),
+        KPIRequest(
+            id="kpi_unit_price",
+            title="Latest Unit Price",
+            prompt="Show the latest-period unit price.",
+        ),
     ]
     resolved_ids: list[str] = []
 
@@ -195,9 +209,28 @@ def test_kpi_title_requests_are_resolved_independently_before_calculation(
         request: KPIRequest,
     ) -> KPIValueDefinition:
         resolved_ids.append(request.id)
+        queries = {
+            "kpi_revenue": 'df["net_revenue_gbp"].sum()',
+            "kpi_profit": 'df["profit_gbp"].sum()',
+            "kpi_quantity": 'df["quantity"].sum()',
+            "kpi_unit_price": 'df["unit_price_gbp"].mean()',
+        }
+        fallback_values = {
+            "kpi_revenue": 4380,
+            "kpi_profit": 1314,
+            "kpi_quantity": 99,
+            "kpi_unit_price": 44,
+        }
         return KPIValueDefinition(
-            measure="net_revenue_gbp" if request.id == "kpi_revenue" else "profit_gbp",
-            aggregation="sum",
+            title=request.title,
+            query=queries[request.id],
+            fallback_value=fallback_values[request.id],
+            trend_kind="increase",
+            trend_text=(
+                "Revenue increased in the latest reporting period."
+                if request.id == "kpi_revenue"
+                else "Profit increased in the latest reporting period."
+            ),
         )
 
     monkeypatch.setattr(kpi_trend_module, "_request_plan", title_plan)
@@ -208,17 +241,88 @@ def test_kpi_title_requests_are_resolved_independently_before_calculation(
     )
 
     result, execution_status = asyncio.run(
-        KPITrendAgent().run_with_status(prepared)
+        KPITrendAgent().run_with_status(prepared, _rows())
     )
 
-    assert set(resolved_ids) == {"kpi_revenue", "kpi_profit"}
+    assert set(resolved_ids) == {
+        "kpi_revenue",
+        "kpi_profit",
+        "kpi_quantity",
+        "kpi_unit_price",
+    }
     revenue = next(item for item in result.kpis if item.id == "kpi_revenue")
     profit = next(item for item in result.kpis if item.id == "kpi_profit")
     assert revenue.title == "Latest Revenue"
     assert revenue.value == 4380
+    assert revenue.query == 'df["net_revenue_gbp"].sum()'
+    assert revenue.trend_kind == "increase"
+    assert revenue.trend_text == "Revenue increased in the latest reporting period."
     assert profit.title == "Latest Profit"
     assert profit.value == 1314
     assert execution_status == "succeeded"
+
+
+def test_kpi_query_parser_accepts_only_safe_scalar_pandas_expressions() -> None:
+    frame = _rows(2)
+
+    assert kpi_trend_module._parse_pandas_query(
+        'df.loc[df["product_category"] == "Membership", "net_revenue_gbp"].sum()',
+        frame,
+    ) == ("net_revenue_gbp", "sum", "product_category", "Membership")
+    assert (
+        kpi_trend_module._parse_pandas_query(
+            '__import__("os").system("echo unsafe")',
+            frame,
+        )
+        is None
+    )
+
+
+def test_kpi_query_typo_uses_the_llm_fallback_value(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "sales.csv"
+    _rows().to_csv(path, index=False)
+    prepared = _prepared(path)
+    request = KPIRequest(
+        id="kpi_revenue",
+        title="Latest Revenue",
+        prompt="Show the latest-period revenue.",
+    )
+
+    async def title_plan(_: dict[str, Any]) -> KPITrendPlan:
+        return KPITrendPlan(kpis=[request])
+
+    async def typo_query(
+        _: dict[str, Any],
+        request: KPIRequest,
+    ) -> KPIValueDefinition:
+        return KPIValueDefinition(
+            title=request.title,
+            query='df["net_reveneu_gbp"].sum()',
+            fallback_value=4321,
+            trend_kind="increase",
+            trend_text="Revenue is expected to be improving.",
+        )
+
+    monkeypatch.setattr(kpi_trend_module, "_request_plan", title_plan)
+    monkeypatch.setattr(
+        kpi_trend_module,
+        "_request_kpi_value_definition",
+        typo_query,
+    )
+
+    result, _ = asyncio.run(
+        KPITrendAgent().run_with_status(prepared, _rows())
+    )
+    revenue = next(item for item in result.kpis if item.id == request.id)
+
+    assert revenue.value == 4321
+    assert revenue.value_source == "llm_fallback"
+    assert revenue.query == 'df["net_reveneu_gbp"].sum()'
+    assert revenue.trend_text == "Revenue is expected to be improving."
+    assert any("LLM fallback value" in warning for warning in result.warnings)
 
 
 def test_multi_year_transaction_history_uses_a_readable_monthly_grain() -> None:
@@ -330,6 +434,7 @@ def test_dashboard_has_non_temporal_charts_forecast_and_actions(
     result, execution_status, failure_reason = asyncio.run(
         DashboardGenerationAgent().run_with_status(
             prepared,
+            frame,
             kpi_output,
             {
                 "anomalies": [
@@ -355,6 +460,7 @@ def test_dashboard_has_non_temporal_charts_forecast_and_actions(
     assert len(dashboard.timeline.forecast) == 3
     assert dashboard.timeline.forecastMetadata.target == "net_revenue_gbp"
     assert dashboard.timeline.anomalies == []
+    assert dashboard.kpis[0].indicator.text == "Increased by 8.0% since Nov 2024"
     assert len(dashboard.supportingCharts) >= 2
     assert len({chart.type for chart in dashboard.supportingCharts}) == len(dashboard.supportingCharts)
     assert all(

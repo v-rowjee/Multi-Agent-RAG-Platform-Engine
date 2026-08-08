@@ -213,7 +213,7 @@ def test_kpi_prompt_requires_four_grounded_title_requests() -> None:
 
     system = toons.loads(prompts.system, strict=True)
 
-    assert "4 to 8 KPI title requests" in system["kpi_coverage"]
+    assert "exactly 4 KPI title requests" in system["kpi_coverage"]
     assert "Never invent columns" in system["kpi_coverage"]
 
 

@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -92,18 +91,16 @@ def dashboard_retrieval_documents(
 
 def _raw_row_documents(
     prepared: dict[str, Any],
+    dataframe: pd.DataFrame,
 ) -> tuple[list[RetrievalDocument], list[str]]:
-    prepared_path = Path(str(prepared.get("prepared_file_path") or ""))
-    if not prepared_path.is_file():
-        return [], ["Prepared rows were unavailable for retrieval indexing."]
-
     try:
-        dataframe = pd.read_csv(prepared_path, low_memory=False)
+        if not isinstance(dataframe, pd.DataFrame):
+            raise TypeError("A prepared pandas DataFrame is required.")
         builder = DatasetDocumentBuilder()
         raw_documents = builder.build_row_documents(
             df=dataframe,
             session_id=str(prepared.get("session_id") or "prepared_dataset"),
-            file_name=str(prepared.get("file_name") or prepared_path.name),
+            file_name=str(prepared.get("file_name") or "dataset.csv"),
             measures=[str(value) for value in prepared.get("primary_measures") or []],
             dimensions=[
                 str(value) for value in prepared.get("dimension_candidates") or []
@@ -142,7 +139,7 @@ def _raw_row_documents(
 
 
 class RetrievalPreparationAgent:
-    async def run(self, prepared_dataset: dict[str, Any], kpi_trend_output: dict[str, Any] | None, anomaly_output: dict[str, Any] | None, forecasting_output: dict[str, Any] | None, synthesis_output: dict[str, Any], dashboard_output: dict[str, Any] | None = None) -> RetrievalPreparationOutput:
+    async def run(self, prepared_dataset: dict[str, Any], dataframe: pd.DataFrame, kpi_trend_output: dict[str, Any] | None, anomaly_output: dict[str, Any] | None, forecasting_output: dict[str, Any] | None, synthesis_output: dict[str, Any], dashboard_output: dict[str, Any] | None = None) -> RetrievalPreparationOutput:
         prepared = prepared_dataset if isinstance(prepared_dataset, dict) else {}
         kpi, anomaly, forecast = kpi_trend_output or {}, anomaly_output or {}, forecasting_output or {}
         synthesis = synthesis_output if isinstance(synthesis_output, dict) else {}
@@ -181,7 +178,7 @@ class RetrievalPreparationAgent:
         if limitations:
             _add(documents, id="limitations", document_type="limitation", title="Analysis limitations", content=" ".join(str(value) for value in limitations), source_ids=["dataset_summary"], metadata={"count": len(limitations)})
         warnings = list(dict.fromkeys([*(prepared.get("warnings") or []), *(kpi.get("warnings") or []), *(anomaly.get("warnings") or []), *(forecast.get("warnings") or []), *(synthesis.get("warnings") or [])]))
-        row_documents, row_warnings = _raw_row_documents(prepared)
+        row_documents, row_warnings = _raw_row_documents(prepared, dataframe)
         documents.extend(row_documents)
         warnings = list(dict.fromkeys([*warnings, *row_warnings]))
         return RetrievalPreparationOutput(status="complete" if documents else "partial", documents=documents, limitations=[str(value) for value in limitations], warnings=[str(value) for value in warnings])
@@ -191,7 +188,7 @@ retrieval_preparation_agent = RetrievalPreparationAgent()
 
 
 async def retrieval_preparation_node(state: dict[str, Any]) -> dict[str, Any]:
-    result = await retrieval_preparation_agent.run(state.get("prepared_dataset", {}), state.get("kpi_trend_output"), state.get("anomaly_output"), state.get("forecasting_output"), state.get("synthesis_output", {}), state.get("dashboard_output"))
+    result = await retrieval_preparation_agent.run(state.get("prepared_dataset", {}), state.get("prepared_dataframe"), state.get("kpi_trend_output"), state.get("anomaly_output"), state.get("forecasting_output"), state.get("synthesis_output", {}), state.get("dashboard_output"))
     return {
         "retrieval_documents": result.documents_as_dicts(),
         "completed_agents": ["retrieval_preparation"],

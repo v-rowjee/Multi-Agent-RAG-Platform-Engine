@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.common import StrictModel
 
-MAX_KPIS = 8
+MAX_KPIS = 4
 MAX_TRENDS = 3
 MAX_ANALYSES = 3
 DEFAULT_HORIZON = 3
@@ -19,6 +19,11 @@ MAX_RECOMMENDATIONS = 5
 class KPIDefinition(StrictModel):
     id: str
     title: str
+    query: str
+    query_valid: bool = True
+    fallback_value: float | int | None = None
+    trend_kind: Literal["increase", "decrease", "note"] | None = None
+    trend_text: str | None = None
     measure: str
     aggregation: str
     dimension: str | None = None
@@ -34,12 +39,13 @@ class KPIRequest(StrictModel):
 
 
 class KPIValueDefinition(StrictModel):
-    """The deterministic dataframe operation required for one KPI request."""
+    """LLM-defined KPI details, including its usable fallback."""
 
-    measure: str
-    aggregation: str
-    dimension: str | None = None
-    dimension_value: str | int | float | bool | None = None
+    title: str = Field(min_length=1)
+    query: str = Field(min_length=1)
+    fallback_value: float | int
+    trend_kind: Literal["increase", "decrease", "note"]
+    trend_text: str = Field(min_length=1, max_length=120)
 
 class TrendDefinition(StrictModel):
     id: str
@@ -71,6 +77,9 @@ class KPIResult(StrictModel):
     baseline_period: str | None = None
     baseline_value: float | int | None = None
     baseline_change_percent: float | None = None
+    trend_kind: Literal["increase", "decrease", "note"] | None = None
+    trend_text: str | None = None
+    value_source: Literal["pandas", "llm_fallback"] = "pandas"
 
 class TrendPoint(StrictModel):
     period: str

@@ -462,7 +462,7 @@ class BusinessIntelligenceService:
         dataset_info: dict[str, Any],
     ) -> dict[str, Any]:
         inspection = self._file_service.inspect_file(
-            dataset.file_name,
+            dataset.storage_path,
             self.storage.download_file(dataset.storage_path),
         ) if not dataset_info else None
         if inspection is None:

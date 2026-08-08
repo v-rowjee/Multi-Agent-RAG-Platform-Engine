@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -45,6 +45,7 @@ class DatasetRecord:
     column_count: int | None = None
     created_at: str | None = None
     updated_at: str | None = None
+    generic_cleaning_report: JsonDict = field(default_factory=dict)
 
 @dataclass(frozen=True)
 class DashboardRecord:
@@ -85,6 +86,7 @@ class AnalysisRepository:
             row_count: int,
             column_count: int,
             session_id: str | None = None,
+            generic_cleaning_report: JsonDict | None = None,
         ) -> DatasetRecord:
             payload: JsonDict = {
                 "id": dataset_id,
@@ -100,6 +102,7 @@ class AnalysisRepository:
                 "error_message": None,
                 "row_count": row_count,
                 "column_count": column_count,
+                "generic_cleaning_report": generic_cleaning_report or {},
             }
             if session_id is not None:
                 payload["session_id"] = session_id
@@ -122,6 +125,7 @@ class AnalysisRepository:
                 legacy_payload = dict(payload)
                 legacy_payload.pop("row_count", None)
                 legacy_payload.pop("column_count", None)
+                legacy_payload.pop("generic_cleaning_report", None)
                 response = table.insert(legacy_payload).execute()
             rows = list(response.data or [])
             if not rows:
@@ -407,6 +411,11 @@ class AnalysisRepository:
                 updated_at=(
                     str(row["updated_at"]) if row.get("updated_at") is not None else None
                 ),
+                generic_cleaning_report=(
+                    dict(row["generic_cleaning_report"])
+                    if isinstance(row.get("generic_cleaning_report"), dict)
+                    else {}
+                ),
             )
 
     @staticmethod
@@ -484,7 +493,9 @@ class AnalysisRepository:
     def _is_missing_dataset_metadata_column(error: Exception) -> bool:
             message = str(error).lower()
             mentions_metadata_column = (
-                "row_count" in message or "column_count" in message
+                "row_count" in message
+                or "column_count" in message
+                or "generic_cleaning_report" in message
             )
             return mentions_metadata_column and (
                 "does not exist" in message

@@ -1,6 +1,7 @@
 import operator
 from typing import Annotated, Any
 
+import pandas as pd
 from typing_extensions import TypedDict
 
 
@@ -10,10 +11,8 @@ class AnalysisState(TypedDict, total=False):
     business_description: str | None
     source_datasets: list[dict[str, Any]]
 
-    uploaded_file_path: str
-    working_directory: str
-    generic_cleaned_file_path: str
-    prepared_file_path: str
+    dataframe: pd.DataFrame
+    prepared_dataframe: pd.DataFrame
 
     generic_cleaning_report: dict[str, Any]
     prepared_dataset: dict[str, Any]

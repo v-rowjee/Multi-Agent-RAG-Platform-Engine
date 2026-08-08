@@ -48,7 +48,7 @@ class AnalysisPipelineRunner:
         if len(datasets) == 1:
             return datasets[0], contents[0]
         frames = [
-            self.files.read_workspace_dataframe(dataset.file_name, content)
+            self.files.read_workspace_dataframe(dataset.storage_path, content)
             for dataset, content in zip(datasets, contents, strict=True)
         ]
         source_column = "__workspace_source_dataset__"
@@ -95,7 +95,7 @@ class AnalysisPipelineRunner:
         dataset: DatasetRecord,
         content: bytes,
     ) -> DashboardResponse:
-        inspection = self.files.inspect_file(dataset.file_name, content)
+        inspection = self.files.inspect_file(dataset.storage_path, content)
         with self.files.temporary_agent_input(dataset, content) as agent_input:
             try:
                 agent = (
@@ -127,71 +127,68 @@ class AnalysisPipelineRunner:
             if content is not None
             else self.storage.download_file(dataset.storage_path)
         )
-        with self.files.temporary_agent_workspace(
-            dataset,
-            content,
-        ) as (agent_input, workspace):
-            initial_state = {
-                "session_id": session_id,
-                "dataset_id": dataset.id,
-                "file_name": dataset.file_name,
-                "business_description": dataset.description,
-                "source_datasets": [
-                    {
-                        "dataset_id": item.id,
-                        "file_name": item.file_name,
-                        "row_count": item.row_count,
-                        "column_count": item.column_count,
-                    }
-                    for item in (workspace_datasets or [dataset])
-                ],
-                "uploaded_file_path": agent_input.filePath,
-                "working_directory": str(workspace),
-                "warnings": [],
-                "errors": [],
-                "completed_agents": [],
-                "failed_agents": [],
-                "skipped_agents": [],
-                "model_invocations": [],
-            }
-            logger.info("Multi-agent pipeline started session_id=%s", session_id)
-            try:
-                result = await (graph or self.graph).ainvoke(initial_state)
-                dashboard_output = result.get("dashboard_output")
-                if not isinstance(dashboard_output, dict):
-                    raise ValueError("The workflow did not return a dashboard output.")
-                dashboard_output = dict(dashboard_output)
-                dashboard_output["sessionId"] = session_id
-                status = str(result.get("workflow_status") or "failed")
-                if status == "failed":
-                    raise RuntimeError("The multi-agent workflow failed.")
-                dashboard_output["status"] = status
-                response = self.dashboards.with_model_metadata(
-                    DashboardResponse.model_validate(dashboard_output),
-                    selected_agents=(result.get("orchestration_plan") or {}).get(
-                        "selected_agents",
-                        [],
-                    ),
-                    model_invocations=result.get("model_invocations") or [],
-                )
-                workflow = {
-                    key: result.get(key)
-                    for key in (
-                        "session_id", "dataset_id", "file_name", "prepared_dataset",
-                        "orchestration_plan", "generic_cleaning_report",
-                        "kpi_trend_output", "anomaly_output", "forecasting_output",
-                        "synthesis_output", "retrieval_documents", "warnings",
-                        "errors", "completed_agents", "failed_agents",
-                        "skipped_agents", "workflow_status",
-                        "model_invocations",
-                    )
+        dataframe = self.files.read_workspace_dataframe(dataset.storage_path, content)
+        initial_state = {
+            "session_id": session_id,
+            "dataset_id": dataset.id,
+            "file_name": dataset.file_name,
+            "business_description": dataset.description,
+            "source_datasets": [
+                {
+                    "dataset_id": item.id,
+                    "file_name": item.file_name,
+                    "row_count": item.row_count,
+                    "column_count": item.column_count,
                 }
-            except Exception:
-                logger.exception(
-                    "Unexpected multi-agent pipeline failure session_id=%s",
-                    session_id,
+                for item in (workspace_datasets or [dataset])
+            ],
+            "dataframe": dataframe,
+            "generic_cleaning_report": dict(dataset.generic_cleaning_report),
+            "warnings": [],
+            "errors": [],
+            "completed_agents": [],
+            "failed_agents": [],
+            "skipped_agents": [],
+            "model_invocations": [],
+        }
+        logger.info("Multi-agent pipeline started session_id=%s", session_id)
+        try:
+            result = await (graph or self.graph).ainvoke(initial_state)
+            dashboard_output = result.get("dashboard_output")
+            if not isinstance(dashboard_output, dict):
+                raise ValueError("The workflow did not return a dashboard output.")
+            dashboard_output = dict(dashboard_output)
+            dashboard_output["sessionId"] = session_id
+            status = str(result.get("workflow_status") or "failed")
+            if status == "failed":
+                raise RuntimeError("The multi-agent workflow failed.")
+            dashboard_output["status"] = status
+            response = self.dashboards.with_model_metadata(
+                DashboardResponse.model_validate(dashboard_output),
+                selected_agents=(result.get("orchestration_plan") or {}).get(
+                    "selected_agents",
+                    [],
+                ),
+                model_invocations=result.get("model_invocations") or [],
+            )
+            workflow = {
+                key: result.get(key)
+                for key in (
+                    "session_id", "dataset_id", "file_name", "prepared_dataset",
+                    "orchestration_plan", "generic_cleaning_report",
+                    "kpi_trend_output", "anomaly_output", "forecasting_output",
+                    "synthesis_output", "retrieval_documents", "warnings",
+                    "errors", "completed_agents", "failed_agents",
+                    "skipped_agents", "workflow_status",
+                    "model_invocations",
                 )
-                return self.failed_execution(session_id, dataset.id)
+            }
+        except Exception:
+            logger.exception(
+                "Unexpected multi-agent pipeline failure session_id=%s",
+                session_id,
+            )
+            return self.failed_execution(session_id, dataset.id)
         return PipelineExecution(
             response=response,
             workflow=workflow,

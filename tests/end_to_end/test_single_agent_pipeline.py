@@ -324,7 +324,10 @@ def test_single_agent_api_full_flow_uses_only_deterministic_fakes(full_flow) -> 
     assert upload_body["status"] == "success"
     assert upload_body["fileName"] == "sales.csv"
     session_id = upload_body["sessionId"]
-    assert storage.files[f"{USER_ID}/{session_id}/sales.csv"] == CSV_CONTENT
+    stored_path = f"{USER_ID}/{session_id}/sales.parquet"
+    assert stored_path in storage.files
+    assert storage.datasets[session_id].storage_path == stored_path
+    assert storage.datasets[session_id].mime_type == "application/vnd.apache.parquet"
     assert storage.datasets[session_id].description == "Quarterly sales"
     assert storage.datasets[session_id].status == "ready"
     assert storage.datasets[session_id].rag_status == "ready"

@@ -147,7 +147,7 @@ class BusinessIntelligenceChatService:
             canonical_columns: dict[str, str] = {}
             for dataset in datasets:
                 frame = self.files.read_dataframe(
-                    dataset.file_name,
+                    dataset.storage_path,
                     self.storage.download_file(dataset.storage_path),
                 )
                 rename: dict[Any, str] = {}

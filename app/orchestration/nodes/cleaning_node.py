@@ -1,29 +1,30 @@
-"""Generic-cleaning graph node."""
-
-from pathlib import Path
+"""Upload-cleaning confirmation graph node."""
 from typing import Any
 
 from app.orchestration.state import AnalysisState
-from app.services.data.cleaning import _generic_clean_csv
+from app.services.data.cleaning import generic_clean_dataframe
 
 
 async def generic_cleaning_node(
     state: AnalysisState,
 ) -> dict[str, Any]:
-    """Adapt the existing generic cleaner for use as a LangGraph node."""
-    uploaded_file_path = str(state.get("uploaded_file_path", "")).strip()
-    working_directory = str(state.get("working_directory") or "").strip()
-    if not working_directory:
-        raise RuntimeError("state.working_directory is required.")
-
-    _, report = _generic_clean_csv(
-        uploaded_file_path,
-        Path(working_directory),
-    )
+    """Confirm that the DataFrame was cleaned and persisted during upload."""
+    dataframe = state.get("dataframe")
+    if dataframe is None:
+        raise RuntimeError("state.dataframe is required.")
+    report = state.get("generic_cleaning_report")
+    if not isinstance(report, dict) or not report:
+        # Compatibility for datasets stored before upload-time cleaning was
+        # introduced. New uploads never take this branch.
+        cleaned, generated = generic_clean_dataframe(dataframe)
+        return {
+            "dataframe": cleaned,
+            "generic_cleaning_report": generated.model_dump(mode="json"),
+            "warnings": generated.warnings,
+            "completed_agents": ["generic_cleaning"],
+        }
 
     return {
-        "generic_cleaned_file_path": report.cleaned_file_path,
-        "generic_cleaning_report": report.model_dump(mode="json"),
-        "warnings": report.warnings,
+        "warnings": list(report.get("warnings") or []),
         "completed_agents": ["generic_cleaning"],
     }

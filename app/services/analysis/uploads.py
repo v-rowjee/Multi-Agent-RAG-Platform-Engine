@@ -17,9 +17,11 @@ from app.schemas.api import UploadCandidate
 from app.services.analysis.files import (
     MAX_UPLOAD_BYTES,
     MAX_UPLOAD_FILES,
+    PARQUET_MIME_TYPE,
     DatasetFileService,
 )
 from app.services.analysis.models import InspectedUpload, UploadedWorkspace
+from app.services.data.cleaning import generic_clean_dataframe
 from app.services.persistence.analysis import (
     AnalysisRepository,
     AnalysisSessionRecord,
@@ -93,12 +95,20 @@ class DatasetUploadService:
                 raise InvalidUploadError(
                     f"'{file_name}' duplicates another file in this batch."
                 )
+            frame = self.files.read_dataframe(
+                file_name,
+                content,
+                parse_error="The uploaded file could not be parsed.",
+            )
+            cleaned_frame, cleaning_report = generic_clean_dataframe(frame)
             item = InspectedUpload(
                 file_name=file_name,
                 mime_type=mime_type,
                 content=content,
+                storage_content=self.files.dataframe_to_parquet(cleaned_frame),
                 file_hash=file_hash,
-                inspection=self.files.inspect_file(file_name, content),
+                inspection=self.files.inspect_dataframe(cleaned_frame),
+                generic_cleaning_report=cleaning_report.model_dump(mode="json"),
             )
             inspected.append(item)
             names.add(normalized_name)
@@ -154,9 +164,9 @@ class DatasetUploadService:
             for index, item in enumerate(inspected):
                 dataset_id = session_id if not session_created and index == 0 else str(uuid4())
                 storage_path = (
-                    f"{user_id}/{session_id}/{item.file_name}"
+                    f"{user_id}/{session_id}/{Path(item.file_name).stem}.parquet"
                     if not session_created and len(inspected) == 1
-                    else f"{user_id}/{session_id}/{dataset_id}/{item.file_name}"
+                    else f"{user_id}/{session_id}/{dataset_id}/{Path(item.file_name).stem}.parquet"
                 )
                 dataset = self._create_dataset(
                     session_id=session_id,
@@ -170,14 +180,14 @@ class DatasetUploadService:
                 datasets.append(dataset)
                 self.storage.upload_file(
                     storage_path=storage_path,
-                    content=item.content,
-                    mime_type=item.mime_type,
+                    content=item.storage_content,
+                    mime_type=PARQUET_MIME_TYPE,
                 )
                 uploaded_paths.append(storage_path)
             return UploadedWorkspace(
                 session=session,
                 datasets=datasets,
-                contents=[item.content for item in inspected],
+                contents=[item.storage_content for item in inspected],
                 uploaded_paths=uploaded_paths,
                 session_created=session_created,
             )
@@ -219,7 +229,7 @@ class DatasetUploadService:
             for item in inspected:
                 dataset_id = str(uuid4())
                 storage_path = (
-                    f"{session.user_id}/{session.id}/{dataset_id}/{item.file_name}"
+                    f"{session.user_id}/{session.id}/{dataset_id}/{Path(item.file_name).stem}.parquet"
                 )
                 dataset = self._create_dataset(
                     session_id=session.id,
@@ -233,8 +243,8 @@ class DatasetUploadService:
                 datasets.append(dataset)
                 self.storage.upload_file(
                     storage_path=storage_path,
-                    content=item.content,
-                    mime_type=item.mime_type,
+                    content=item.storage_content,
+                    mime_type=PARQUET_MIME_TYPE,
                 )
                 uploaded_paths.append(storage_path)
         except Exception as error:
@@ -251,7 +261,7 @@ class DatasetUploadService:
         return UploadedWorkspace(
             session=session,
             datasets=datasets,
-            contents=[item.content for item in inspected],
+            contents=[item.storage_content for item in inspected],
             uploaded_paths=uploaded_paths,
             session_created=False,
         )
@@ -310,12 +320,16 @@ class DatasetUploadService:
             "user_id": user_id,
             "file_name": item.file_name,
             "storage_path": storage_path,
-            "mime_type": item.mime_type,
+            "mime_type": PARQUET_MIME_TYPE,
             "file_size": len(item.content),
             "file_hash": item.file_hash,
             "description": description,
             "row_count": item.inspection.row_count,
             "column_count": item.inspection.column_count,
+            "generic_cleaning_report": {
+                **item.generic_cleaning_report,
+                "cleaned_file_path": storage_path,
+            },
         }
         if legacy:
             parameters = inspect.signature(
@@ -332,6 +346,14 @@ class DatasetUploadService:
                 return DatasetRecord(
                     **{**dataset.__dict__, "session_id": session_id}
                 )
+        parameters = inspect.signature(self.analysis.create_dataset).parameters.values()
+        accepts_cleaning_report = any(
+            parameter.name == "generic_cleaning_report"
+            or parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters
+        )
+        if not accepts_cleaning_report:
+            values.pop("generic_cleaning_report", None)
         return self.analysis.create_dataset(**values)
 
     @staticmethod

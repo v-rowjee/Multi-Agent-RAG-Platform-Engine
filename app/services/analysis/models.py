@@ -46,8 +46,10 @@ class InspectedUpload:
     file_name: str
     mime_type: str
     content: bytes
+    storage_content: bytes
     file_hash: str
     inspection: DatasetInspection
+    generic_cleaning_report: dict[str, Any]
 
 
 @dataclass(frozen=True)

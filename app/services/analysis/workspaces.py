@@ -92,7 +92,7 @@ class WorkspaceService:
             column_count = dataset.column_count
             if row_count is None or column_count is None:
                 inspection = self.files.inspect_file(
-                    dataset.file_name,
+                    dataset.storage_path,
                     self.storage.download_file(dataset.storage_path),
                 )
                 row_count = inspection.row_count
@@ -153,11 +153,11 @@ class WorkspaceService:
         total_rows = dataset.row_count
         if total_rows is None:
             total_rows = self.files.inspect_file(
-                dataset.file_name,
+                dataset.storage_path,
                 content,
             ).row_count
         columns, rows = self.files.read_preview_page(
-            dataset.file_name,
+            dataset.storage_path,
             content,
             page,
             page_size,

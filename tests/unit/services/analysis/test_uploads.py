@@ -31,6 +31,13 @@ def test_prepare_uploads_returns_typed_results_and_rejects_duplicate_hashes() ->
 
     assert isinstance(prepared[0], InspectedUpload)
     assert prepared[0].inspection.row_count == 1
+    stored = DatasetFileService().read_dataframe(
+        "sales.parquet", prepared[0].storage_content
+    )
+    assert stored.to_dict(orient="records") == [{"region": "North", "revenue": 10}]
+    assert DatasetFileService().read_dataframe(
+        "sales.csv", prepared[0].storage_content
+    ).equals(stored)
 
     with pytest.raises(InvalidUploadError, match="existing workspace dataset"):
         asyncio.run(

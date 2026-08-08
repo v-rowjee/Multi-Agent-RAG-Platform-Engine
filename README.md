@@ -23,7 +23,7 @@ storage/model integrations in `app/services` and `app/rag`. Tests mirror these
 boundaries under `tests/unit`, `tests/integration`, and `tests/end_to_end`.
 
 Copy `.env.sample` to `.env` and set the Supabase service-role key. In a new
-Supabase project, create a private Storage bucket named `uploads`, then apply
+Supabase project, create a private Storage bucket named `datasets`, then apply
 `scripts/db.sql` once in the SQL editor before starting the API. The script is a
 non-destructive first-time bootstrap: it creates the application tables,
 profiles existing Supabase Auth accounts, and never drops or migrates objects.
@@ -129,7 +129,9 @@ check one model without repeating the others.
 The multi-agent analysis flow is:
 
 ```text
-Upload -> Generic Cleaning -> Data Preparation -> LLM Orchestrator
+CSV Upload -> pandas DataFrame -> Generic Cleaning -> Parquet Storage
+           -> Dashboard request fetches Parquet -> pandas DataFrame
+       -> Data Preparation -> LLM Orchestrator
        -> capability-gated KPI/Trend, Anomaly, and Forecast specialists
        -> Specialist Join -> Insight Synthesis
        -> Dashboard Generation ----\
@@ -139,6 +141,11 @@ Upload -> Generic Cleaning -> Data Preparation -> LLM Orchestrator
                                       -> Background Retrieval Indexing
                                       -> Final RAG Status/Persistence -> END
 ```
+
+Parquet is used only as the persisted dataset format. The multi-agent graph
+passes pandas DataFrames between cleaning, preparation, specialist analysis,
+dashboard generation, and retrieval preparation; it does not create
+intermediate CSV files.
 
 RAG model assignments, embedding and reranking limits, retrieval thresholds,
 and document chunking settings live in `config/rag.toml`. Both checked-in TOML

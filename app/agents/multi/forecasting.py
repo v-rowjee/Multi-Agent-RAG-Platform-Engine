@@ -1,7 +1,6 @@
 """Independent Chronos-2 forecasting specialist."""
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -37,11 +36,6 @@ SUPPORTED_GRANULARITIES = {"day", "week", "month", "quarter", "year"}
 class ForecastingError(RuntimeError):
     pass
 
-
-def _path(prepared: dict[str, Any]) -> Path:
-    path = Path(str(prepared.get("prepared_file_path") or ""))
-    if not path.is_file(): raise ForecastingError("prepared_dataset must contain an existing prepared CSV path.")
-    return path
 
 
 def _frequency(granularity: str) -> str:
@@ -152,9 +146,13 @@ def _fallback_forecast(
 
 
 class ForecastingAgent:
-    async def run(self, prepared_dataset: dict[str, Any]) -> ForecastingOutput:
+    async def run(
+        self, prepared_dataset: dict[str, Any], dataframe: pd.DataFrame
+    ) -> ForecastingOutput:
         if not isinstance(prepared_dataset, dict): raise ForecastingError("prepared_dataset must be a dictionary.")
-        df = pd.read_csv(_path(prepared_dataset), low_memory=False)
+        if not isinstance(dataframe, pd.DataFrame):
+            raise ForecastingError("A prepared pandas DataFrame is required.")
+        df = dataframe.copy()
         limitation = _supports(prepared_dataset, df)
         if limitation: return ForecastingOutput(limitations=[limitation])
         warnings: list[str] = []
@@ -194,7 +192,9 @@ forecasting_agent = ForecastingAgent()
 
 async def forecasting_node(state: dict[str, Any]) -> dict[str, Any]:
     try:
-        result = await forecasting_agent.run(state.get("prepared_dataset", {}))
+        result = await forecasting_agent.run(
+            state.get("prepared_dataset", {}), state.get("prepared_dataframe")
+        )
     except ForecastingError as exc:
         result = ForecastingOutput(limitations=[str(exc)])
     execution_status = (

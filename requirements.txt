@@ -4,6 +4,7 @@ python-multipart
 pydantic
 
 pandas
+pyarrow
 openpyxl
 xlrd
 
