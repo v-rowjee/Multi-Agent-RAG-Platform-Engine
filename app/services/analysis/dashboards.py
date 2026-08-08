@@ -23,6 +23,16 @@ class DashboardAssembler:
         self.settings = settings
         self.files = files
 
+    @staticmethod
+    def inspection_period(inspection: DatasetInspection) -> dict[str, str] | None:
+        if not inspection.period_start or not inspection.period_end:
+            return None
+        return {
+            "start": inspection.period_start,
+            "end": inspection.period_end,
+            "label": f"{inspection.period_start} to {inspection.period_end}",
+        }
+
     def with_model_metadata(
         self,
         response: DashboardResponse,
@@ -142,8 +152,8 @@ class DashboardAssembler:
                     "fileName": dataset.file_name,
                     "rowCount": inspection.row_count,
                     "columnCount": inspection.column_count,
-                    "timeField": None,
-                    "period": None,
+                    "timeField": inspection.time_field,
+                    "period": self.inspection_period(inspection),
                     "measures": list(inspection.measures),
                     "dimensions": list(inspection.dimensions),
                     "quality": {
@@ -334,8 +344,8 @@ class DashboardAssembler:
                     "fileName": dataset.file_name,
                     "rowCount": rows,
                     "columnCount": columns,
-                    "timeField": None,
-                    "period": None,
+                    "timeField": inspection.time_field,
+                    "period": self.inspection_period(inspection),
                     "measures": inspection.measures,
                     "dimensions": inspection.dimensions,
                     "quality": {

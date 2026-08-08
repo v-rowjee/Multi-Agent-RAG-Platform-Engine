@@ -22,6 +22,9 @@ class DatasetInspection:
     missing_value_count: int
     duplicate_row_count: int
     completeness_percent: float
+    time_field: str | None = None
+    period_start: str | None = None
+    period_end: str | None = None
 
     def api_dict(self) -> dict[str, Any]:
         return {
@@ -32,6 +35,9 @@ class DatasetInspection:
             "missingValueCount": self.missing_value_count,
             "duplicateRowCount": self.duplicate_row_count,
             "completenessPercent": self.completeness_percent,
+            "timeField": self.time_field,
+            "periodStart": self.period_start,
+            "periodEnd": self.period_end,
         }
 
 

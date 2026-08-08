@@ -16,6 +16,7 @@ import pandas as pd
 from app.core.exceptions import InvalidUploadError
 from app.schemas.api import BusinessIntelligenceAgentInput, UploadCandidate
 from app.services.analysis.models import DatasetInspection
+from app.services.data.profiling import _profile_dataset
 from app.services.persistence.analysis import DatasetRecord
 
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
@@ -117,6 +118,12 @@ class DatasetFileService:
             str(column)
             for column in frame.select_dtypes(include="number").columns
         ]
+        profile = _profile_dataset(frame, None)
+        time_field = profile.candidate_date_columns[0] if profile.candidate_date_columns else None
+        time_profile = next(
+            (item for item in profile.column_profiles if item.name == time_field),
+            None,
+        )
         return DatasetInspection(
             row_count=row_count,
             column_count=column_count,
@@ -127,6 +134,9 @@ class DatasetFileService:
             missing_value_count=missing,
             duplicate_row_count=duplicates,
             completeness_percent=completeness,
+            time_field=time_field,
+            period_start=time_profile.date_minimum if time_profile else None,
+            period_end=time_profile.date_maximum if time_profile else None,
         )
 
     def read_workspace_dataframe(
