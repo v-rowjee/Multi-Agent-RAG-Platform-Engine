@@ -1,10 +1,11 @@
-"""Independent anomaly-detection specialist using pandas and numpy."""
+"""Isolation Forest anomaly specialist with grounded business interpretation."""
 from __future__ import annotations
 
 import re
 from typing import Any, Literal
 
 import pandas as pd
+from sklearn.ensemble import IsolationForest
 
 from app.core.config import agent_model_policy
 from app.core.llm import request_structured, safe_model_failure_reason
@@ -13,6 +14,7 @@ from app.core.prompt_loader import render_agent_prompts
 from app.schemas.specialists import (
     AnomalyDefinition,
     AnomalyDetectionOutput,
+    AnomalyInterpretationOutput,
     AnomalyPlan,
     AnomalyResult,
 )
@@ -26,17 +28,13 @@ from app.services.data.series import (
 )
 
 MIN_TIME_PERIODS = 6
-MIN_ROLLING_PERIODS = 6
+MIN_ISOLATION_SAMPLES = 8
 MAX_GROUP_CARDINALITY = 20
 MAX_ANALYSES = 3
 MAX_ANOMALIES = 10
-SUPPORTED_METHODS = {"z_score", "iqr", "rolling_deviation", "percentage_change"}
+SUPPORTED_METHODS = {"isolation_forest"}
 SUPPORTED_AGGREGATIONS = {"sum", "mean", "count"}
 SUPPORTED_GRANULARITIES = {"day", "week", "month", "quarter", "year"}
-SCORE_CRITICAL = 4.0
-SCORE_WARNING = 3.0
-PERCENT_CRITICAL = 40.0
-PERCENT_WARNING = 20.0
 
 
 class AnomalyDetectionError(RuntimeError):
@@ -86,9 +84,9 @@ def _fallback(prepared: dict[str, Any], df: pd.DataFrame) -> AnomalyPlan:
         periods = pd.to_datetime(df[date], errors="coerce").dropna().dt.to_period("M").nunique()
     if isinstance(date, str) and date in df and periods >= MIN_TIME_PERIODS:
         granularity = selected_granularity(prepared)
-        definition = AnomalyDefinition(id=f"{granularity}_{_slug(measures[0])}_rolling", measure=measures[0], method="rolling_deviation", aggregation=aggregation_for_measure(measures[0]), date_column=date, granularity=granularity)
+        definition = AnomalyDefinition(id=f"{granularity}_{_slug(measures[0])}_isolation_forest", measure=measures[0], method="isolation_forest", aggregation=aggregation_for_measure(measures[0]), date_column=date, granularity=granularity)
     else:
-        definition = AnomalyDefinition(id=f"{_slug(measures[0])}_iqr", measure=measures[0], method="iqr")
+        definition = AnomalyDefinition(id=f"{_slug(measures[0])}_isolation_forest", measure=measures[0], method="isolation_forest")
     return AnomalyPlan(analyses=[definition], limitations=["Anomaly - Deterministic planning was used because LLM planning was unavailable or invalid."])
 
 
@@ -114,10 +112,10 @@ def _ensure_primary_temporal_analysis(
     canonical = AnomalyDefinition(
         id=(
             f"{primary.granularity}_{_slug(primary.measure)}_"
-            "rolling_deviation"
+            "isolation_forest"
         ),
         measure=primary.measure,
-        method="rolling_deviation",
+        method="isolation_forest",
         aggregation=primary.aggregation,
         date_column=primary.date_column,
         granularity=primary.granularity,
@@ -176,55 +174,115 @@ def _series(df: pd.DataFrame, item: AnomalyDefinition) -> list[tuple[str | None,
     return output
 
 
-def _severity(score: float | None, percentage: float | None) -> Literal["informational", "warning", "critical"]:
-    if percentage is not None:
-        return "critical" if abs(percentage) >= PERCENT_CRITICAL else "warning" if abs(percentage) >= PERCENT_WARNING else "informational"
-    value = abs(score or 0.0)
-    return "critical" if value >= SCORE_CRITICAL else "warning" if value >= SCORE_WARNING else "informational"
+def _severity(rank: int) -> Literal["informational", "warning", "critical"]:
+    """Rank the most isolated observation as critical, without inventing a scale."""
+    return "critical" if rank == 0 else "warning" if rank < 3 else "informational"
 
 
-def _result(item: AnomalyDefinition, period: Any, observed: float, expected: float | None, score: float | None, percentage: float | None, group: str | None = None) -> AnomalyResult:
+def _result(item: AnomalyDefinition, period: Any, observed: float, expected: float | None, score: float, severity: Literal["informational", "warning", "critical"], group: str | None = None) -> AnomalyResult:
     label = str(period) if period is not None else None
     stable_id = "_".join(part for part in [item.granularity or "row", _slug(item.measure), _slug(group or ""), _slug(label or "value"), item.method] if part)
     evidence = (f"{item.group_by}={group}; " if group is not None else "") + f"Observed {observed:.2f}" + (f" versus expected {expected:.2f}" if expected is not None else "")
-    return AnomalyResult(id=stable_id, analysis_id=item.id, metric=item.measure, aggregation=item.aggregation, granularity=item.granularity, period=label, observed_value=round(observed, 6), expected_value=round(expected, 6) if expected is not None else None, deviation_percentage=round(percentage, 6) if percentage is not None else None, anomaly_score=round(score, 6) if score is not None else None, severity=_severity(score, percentage), method=item.method, evidence=evidence)
+    return AnomalyResult(id=stable_id, analysis_id=item.id, metric=item.measure, aggregation=item.aggregation, granularity=item.granularity, period=label, observed_value=round(observed, 6), expected_value=round(expected, 6) if expected is not None else None, deviation_percentage=None, anomaly_score=round(score, 6), severity=severity, method=item.method, evidence=evidence)
 
 
 def _detect(item: AnomalyDefinition, values: pd.Series, group: str | None = None) -> list[AnomalyResult]:
-    if len(values) < (MIN_TIME_PERIODS if item.date_column else 4): return []
-    output: list[AnomalyResult] = []
-    numeric = values.astype(float)
-    if item.method == "z_score":
-        mean, std = float(numeric.mean()), float(numeric.std(ddof=0))
-        if std == 0: return []
-        for period, value in numeric.items():
-            score = (float(value) - mean) / std
-            if abs(score) >= SCORE_WARNING: output.append(_result(item, period, float(value), mean, score, None, group))
-    elif item.method == "iqr":
-        q1, q3 = float(numeric.quantile(.25)), float(numeric.quantile(.75)); iqr = q3 - q1
-        if iqr == 0: return []
-        lower, upper = q1 - 1.5 * iqr, q3 + 1.5 * iqr
-        for period, value in numeric.items():
-            if value < lower or value > upper:
-                expected = q3 if value > upper else q1
-                score = abs(float(value) - expected) / iqr
-                output.append(_result(item, period, float(value), expected, score, None, group))
-    elif item.method == "rolling_deviation":
-        for position, (period, value) in enumerate(numeric.items()):
-            history = numeric.iloc[max(0, position - MIN_ROLLING_PERIODS):position]
-            if len(history) < MIN_ROLLING_PERIODS: continue
-            expected, std = float(history.mean()), float(history.std(ddof=0))
-            if std == 0: continue
-            score = (float(value) - expected) / std
-            if abs(score) >= SCORE_WARNING: output.append(_result(item, period, float(value), expected, score, None, group))
-    else:
-        for position, (period, value) in enumerate(numeric.items()):
-            if position == 0: continue
-            previous = float(numeric.iloc[position - 1])
-            if previous == 0: continue
-            percentage = (float(value) - previous) / abs(previous) * 100
-            if abs(percentage) >= PERCENT_WARNING: output.append(_result(item, period, float(value), previous, None, percentage, group))
-    return output
+    numeric = pd.to_numeric(values, errors="coerce").dropna().astype(float)
+    if len(numeric) < MIN_ISOLATION_SAMPLES or numeric.nunique() < 2:
+        return []
+    detector = IsolationForest(
+        contamination="auto",
+        n_estimators=100,
+        random_state=42,
+    )
+    observations = numeric.to_numpy().reshape(-1, 1)
+    predictions = detector.fit_predict(observations)
+    scores = -detector.score_samples(observations)
+    expected = float(numeric.median())
+    flagged = [
+        (index, float(value), float(score))
+        for index, value, prediction, score in zip(
+            numeric.index, numeric, predictions, scores, strict=True
+        )
+        if prediction == -1
+    ]
+    ranked = sorted(flagged, key=lambda result: result[2], reverse=True)
+    return [
+        _result(item, period, observed, expected, score, _severity(rank), group)
+        for rank, (period, observed, score) in enumerate(ranked)
+    ]
+
+
+def _interpretation_payload(
+    prepared: dict[str, Any],
+    anomalies: list[AnomalyResult],
+) -> dict[str, Any]:
+    profile = prepared.get("dataset_profile") or {}
+    return {
+        "business_description": profile.get("business_description"),
+        "anomalies": [
+            {
+                "anomaly_id": item.id,
+                "metric": item.metric,
+                "period": item.period,
+                "observed_value": item.observed_value,
+                "expected_value": item.expected_value,
+                "severity": item.severity,
+                "evidence": item.evidence,
+            }
+            for item in anomalies
+        ],
+    }
+
+
+async def _request_interpretations(
+    prepared: dict[str, Any],
+    anomalies: list[AnomalyResult],
+) -> AnomalyInterpretationOutput:
+    prompts = render_agent_prompts(
+        "multi/anomaly_detection",
+        message_set="interpretation",
+        payload=_interpretation_payload(prepared, anomalies),
+    )
+    return await request_structured(
+        policy=agent_model_policy("anomaly_detection"),
+        response_model=AnomalyInterpretationOutput,
+        schema_name="anomaly_detection_interpretation",
+        messages=[
+            {"role": "system", "content": prompts.system},
+            {"role": "user", "content": prompts.user},
+        ],
+    )
+
+
+def _fallback_interpretation(anomaly: AnomalyResult) -> str:
+    period = f" in {anomaly.period}" if anomaly.period else ""
+    return (
+        f"{anomaly.metric} is an unusually isolated observation{period}; "
+        "validate the underlying records and review relevant operational drivers."
+    )
+
+
+def _apply_interpretations(
+    anomalies: list[AnomalyResult],
+    interpretations: AnomalyInterpretationOutput,
+) -> list[AnomalyResult]:
+    by_id = {
+        item.anomaly_id: item.business_interpretation.strip()
+        for item in interpretations.interpretations
+        if item.business_interpretation.strip()
+    }
+    return [
+        item.model_copy(
+            update={
+                "business_interpretation": by_id.get(
+                    item.id,
+                    _fallback_interpretation(item),
+                )
+            }
+        )
+        for item in anomalies
+    ]
 
 
 class AnomalyDetectionAgent:
@@ -271,10 +329,33 @@ class AnomalyDetectionAgent:
         for item in analyses:
             for group, values in _series(df, item):
                 anomalies.extend(_detect(item, values, group))
-        anomalies.sort(key=lambda result: (result.severity != "critical", result.severity != "warning", -(abs(result.anomaly_score or result.deviation_percentage or 0))))
+        anomalies.sort(key=lambda result: (result.severity != "critical", result.severity != "warning", -(result.anomaly_score or 0)))
+        anomalies = anomalies[:MAX_ANOMALIES]
+        if anomalies:
+            try:
+                interpretations = await _request_interpretations(
+                    prepared_dataset,
+                    anomalies,
+                )
+                anomalies = _apply_interpretations(anomalies, interpretations)
+            except Exception as exc:
+                warnings.append(
+                    "Business interpretation used a deterministic fallback: "
+                    f"{safe_model_failure_reason(exc)}"
+                )
+                anomalies = [
+                    item.model_copy(
+                        update={
+                            "business_interpretation": _fallback_interpretation(item)
+                        }
+                    )
+                    for item in anomalies
+                ]
+                execution_status = "fallback"
+                failure_reason = safe_model_failure_reason(exc)
         return (
             AnomalyDetectionOutput(
-                anomalies=anomalies[:MAX_ANOMALIES],
+                anomalies=anomalies,
                 warnings=warnings,
                 limitations=[
                     *(prepared_dataset.get("limitations") or []),

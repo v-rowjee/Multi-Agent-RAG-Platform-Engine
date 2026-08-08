@@ -356,8 +356,35 @@ def test_forecast_falls_back_and_keeps_primary_timeline_target(
         "2025-01",
         "2025-02",
         "2025-03",
+        "2025-04",
+        "2025-05",
+        "2025-06",
     ]
-    assert len(result.forecast) == 3
+    assert len(result.forecast) == 6
+
+
+def test_forecast_horizon_is_one_quarter_of_observed_months(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "year_of_sales.csv"
+    _rows(12).to_csv(path, index=False)
+    prepared = _prepared(path)
+    prepared["temporal_profile"]["unique_periods"] = 12
+    prepared["temporal_profile"]["maximum_date"] = "2023-12-01"
+
+    async def unavailable(*_: Any, **__: Any):
+        raise RuntimeError("Chronos-2 offline")
+
+    monkeypatch.setattr(forecasting_module.forecasting_service, "forecast", unavailable)
+    result = asyncio.run(ForecastingAgent().run(prepared))
+
+    assert result.horizon == 3
+    assert [point.period for point in result.forecast] == [
+        "2024-01",
+        "2024-02",
+        "2024-03",
+    ]
 
 
 def test_dashboard_has_non_temporal_charts_forecast_and_actions(

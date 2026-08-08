@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import json
 import logging
 import re
@@ -593,7 +594,7 @@ class BusinessIntelligenceAgent:
         aggregation = "mean" if self._average(measure) else "sum"
         working = df[[date_field, measure]].dropna().copy()
         working["period"] = working[date_field].dt.to_period(code)
-        grouped = working.groupby("period")[measure].agg(aggregation).tail(18)
+        grouped = working.groupby("period")[measure].agg(aggregation)
         if grouped.empty:
             return None
 
@@ -621,7 +622,8 @@ class BusinessIntelligenceAgent:
             x = np.arange(len(values), dtype=float)
             slope, intercept = np.polyfit(x, values, 1)
             residual_spread = float(np.std(values - (slope * x + intercept))) * 1.96
-            for step in range(1, 4):
+            horizon = max(1, math.ceil(len(values) * 0.25))
+            for step in range(1, horizon + 1):
                 prediction = float(slope * (len(values) - 1 + step) + intercept)
                 period = str(grouped.index[-1] + step)
                 forecast.append(

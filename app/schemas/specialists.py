@@ -11,8 +11,6 @@ from app.schemas.common import StrictModel
 MAX_KPIS = 4
 MAX_TRENDS = 3
 MAX_ANALYSES = 3
-DEFAULT_HORIZON = 3
-MAX_FORECAST_HORIZON = 24
 MIN_RECOMMENDATIONS = 3
 MAX_RECOMMENDATIONS = 5
 
@@ -128,6 +126,21 @@ class AnomalyResult(StrictModel):
     severity: Literal["informational", "warning", "critical"]
     method: str
     evidence: str
+    business_interpretation: str | None = Field(default=None, max_length=240)
+
+
+class AnomalyInterpretation(StrictModel):
+    """A concise, grounded explanation of one detected observation."""
+
+    anomaly_id: str
+    business_interpretation: str = Field(min_length=1, max_length=240)
+
+
+class AnomalyInterpretationOutput(StrictModel):
+    interpretations: list[AnomalyInterpretation] = Field(
+        default_factory=list,
+        max_length=MAX_ANALYSES * 4,
+    )
 
 class AnomalyDetectionOutput(StrictModel):
     status: Literal["complete", "partial"] = "complete"
@@ -142,7 +155,7 @@ class ForecastDefinition(StrictModel):
     aggregation: str
     date_column: str
     granularity: str
-    horizon: int = Field(default=DEFAULT_HORIZON, ge=1, le=MAX_FORECAST_HORIZON)
+    horizon: int = Field(ge=1)
     group_by: str | None = None
     group_value: str | int | float | bool | None = None
 

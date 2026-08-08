@@ -1,6 +1,7 @@
 """Independent Chronos-2 forecasting specialist."""
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import numpy as np
@@ -22,13 +23,12 @@ from app.services.data.series import (
     selected_date_column,
     selected_granularity,
 )
-from app.services.forecasting.chronos import MAX_CONTEXT
 from app.services.forecasting.service import forecasting_service
 
 # This matches data preparation's capability gate.  Short histories are still
 # labelled by the fallback model, while longer series can use Chronos-2.
 MIN_FORECAST_PERIODS = 4
-DEFAULT_HORIZON = 3
+FORECAST_HORIZON_FRACTION = 0.25
 SUPPORTED_AGGREGATIONS = {"sum", "mean", "count"}
 SUPPORTED_GRANULARITIES = {"day", "week", "month", "quarter", "year"}
 
@@ -50,6 +50,13 @@ def _numeric(df: pd.DataFrame, column: str) -> bool:
     return is_numeric_measure(df, column)
 
 
+def _forecast_horizon(period_count: int) -> int:
+    """Return one quarter of the observed regular time intervals, rounded up."""
+    if period_count < 1:
+        raise ForecastingError("Forecasting requires at least one historical period.")
+    return max(1, math.ceil(period_count * FORECAST_HORIZON_FRACTION))
+
+
 def _supports(prepared: dict[str, Any], df: pd.DataFrame) -> str | None:
     flags = prepared.get("capability_flags") or {}
     if flags.get("supports_forecasting") is not True: return "Forecasting is not supported by the prepared dataset capability flags."
@@ -68,6 +75,8 @@ def _fallback(prepared: dict[str, Any], df: pd.DataFrame) -> ForecastPlan:
     slug = "_".join(
         part for part in primary.measure.lower().replace("-", "_").split("_") if part
     )
+    date_values = pd.to_datetime(df[primary.date_column], errors="coerce").dropna()
+    period_count = date_values.dt.to_period(_frequency(primary.granularity)).nunique()
     return ForecastPlan(
         forecast=ForecastDefinition(
             id=f"forecast_{slug or 'measure'}",
@@ -76,7 +85,7 @@ def _fallback(prepared: dict[str, Any], df: pd.DataFrame) -> ForecastPlan:
             aggregation=primary.aggregation,
             date_column=primary.date_column,
             granularity=primary.granularity,
-            horizon=DEFAULT_HORIZON,
+            horizon=_forecast_horizon(period_count),
         )
     )
 
@@ -102,7 +111,7 @@ def _prepare(df: pd.DataFrame, item: ForecastDefinition) -> pd.Series:
     regular = regular.interpolate(limit=2, limit_area="inside")
     if regular.isna().any(): raise ForecastingError("The selected time series has unfillable gaps.")
     if len(regular) < MIN_FORECAST_PERIODS: raise ForecastingError(f"The selected series has fewer than {MIN_FORECAST_PERIODS} usable periods.")
-    return regular.iloc[-MAX_CONTEXT:]
+    return regular
 
 
 def _fallback_forecast(
@@ -147,9 +156,19 @@ def _fallback_forecast(
 
 class ForecastingAgent:
     async def run(
-        self, prepared_dataset: dict[str, Any], dataframe: pd.DataFrame
+        self, prepared_dataset: dict[str, Any], dataframe: pd.DataFrame | None = None
     ) -> ForecastingOutput:
         if not isinstance(prepared_dataset, dict): raise ForecastingError("prepared_dataset must be a dictionary.")
+        if dataframe is None:
+            prepared_file_path = prepared_dataset.get("prepared_file_path")
+            if not isinstance(prepared_file_path, str) or not prepared_file_path:
+                raise ForecastingError("A prepared pandas DataFrame is required.")
+            try:
+                dataframe = pd.read_csv(prepared_file_path)
+            except Exception as exc:
+                raise ForecastingError(
+                    "The prepared forecasting data could not be loaded."
+                ) from exc
         if not isinstance(dataframe, pd.DataFrame):
             raise ForecastingError("A prepared pandas DataFrame is required.")
         df = dataframe.copy()
@@ -162,6 +181,9 @@ class ForecastingAgent:
         try: series = _prepare(df, definition)
         except Exception as exc:
             return ForecastingOutput(series_id=definition.id, title=definition.title, measure=definition.measure, aggregation=definition.aggregation, granularity=definition.granularity, horizon=definition.horizon, limitations=[*limitations, str(exc)], warnings=warnings)
+        definition = definition.model_copy(
+            update={"horizon": _forecast_horizon(len(series))}
+        )
         historical = [HistoricalPoint(period=str(period), value=round(float(value), 6)) for period, value in series.items()]
         try:
             response = await forecasting_service.forecast(series, definition.horizon)
