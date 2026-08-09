@@ -50,52 +50,46 @@ file explicitly narrows the answer to that dataset.
 
 ## Pipeline mode
 
-Set the pipeline mode in `config/agents.toml`:
+Set global runtime mode and the model profile in `config/runtime.toml`:
 
 ```toml
-[pipeline]
-# Change this to "single" for the existing single-agent dashboard and chat workflow.
-mode = "multi"
+[runtime]
+# "groq" uses Groq only; "mix" uses the Groq + OpenRouter profile.
+agent_profile = "groq"
+# Change to "single" for the one-agent dashboard and chat workflow.
+pipeline_mode = "multi"
 ```
 
 `multi` is the checked-in default. The two modes expose
 the same upload, dashboard, chat, and chat-history API contracts.
 
-Each `agents.<name>` section selects the provider, model, generation limits,
-and reasoning effort for one LLM invocation. Each LLM agent has one versioned
+The selected complete multi-agent profile (`config/agents.groq.toml` or
+`config/agents.mix.toml`) selects the provider, model, generation limits, and
+reasoning effort for every LLM invocation. Both profiles are validated against
+the same required multi-agent set at startup. The independent
+`config/agents.single.toml` file contains the single-dashboard and single-chat
+policies. Each LLM agent has one versioned
 TOON bundle in `app/prompts/`; the backend validates the bundle at startup and
 serializes its structured system and user context as TOON before invocation.
 Mode and model settings are deliberately not read from `.env`.
 The multi-agent chat response has a 15-second generation limit. If it expires,
 the API returns already-retrieved recommendation evidence when available.
-The `[forecasting]` table configures the Chronos-2 model and its limits.
+Forecasting always uses the fixed Chronos-2 engine (`amazon/chronos-2`).
 Keep API keys, Supabase credentials, and other secrets in `.env` only.
 
-## Model alignment
+## Model profiles
 
-The checked-in multi-agent workflow mixes providers by workload:
-
-| Step / agent | Model | Provider |
-| --- | --- | --- |
-| Data preparation | `openai/gpt-oss-20b` | Groq |
-| Orchestrator | `openai/gpt-oss-20b` | Groq |
-| KPI and trend analysis | `openai/gpt-oss-120b` | Groq |
-| Anomaly detection | `nvidia/nemotron-3-super-120b-a12b:free` | OpenRouter |
-| Forecasting | `amazon/chronos-2` | Self-hosted |
-| Insight synthesis | `nvidia/nemotron-3-super-120b-a12b:free` | OpenRouter |
-| Dashboard generation | `nvidia/nemotron-3-super-120b-a12b:free` | OpenRouter |
-| Retrieval embedding | `BAAI/bge-small-en-v1.5` | Self-hosted |
-| Retrieval reranking | `BAAI/bge-reranker-v2-m3` | Self-hosted |
-| Chat | `openai/gpt-oss-120b` | Groq |
+`groq` is the checked-in default and uses Groq for every LLM call. `mix` keeps
+Groq for fast routing, KPI, and chat calls while assigning anomaly detection,
+insight synthesis, dashboard generation, and the single dashboard to OpenRouter.
+Select the profile only in `runtime.toml`; do not partially edit a profile.
 
 Generic cleaning, specialist join, and Supabase persistence are non-LLM
 steps. Forecast output is passed directly to insight synthesis, so the optional
 forecast-narration call is not instantiated. If a separate narration node is
 introduced later, it should use `openai/gpt-oss-20b` through Groq.
 
-Every LLM agent independently selects `groq` or `openrouter` in
-`config/agents.toml`. Use a model identifier available from the selected
-provider. Configure only the credentials needed by the active policies:
+Configure credentials required by the selected profile:
 
 ```dotenv
 GROQ_API_KEY=your-groq-api-key
@@ -104,9 +98,9 @@ OPENROUTER_API_KEY=your-openrouter-api-key
 
 Changing `provider` does not change the agent prompts, response schemas,
 deterministic validation, fallback behavior, or API contracts.
-Restart the backend after changing `config/agents.toml`; runtime configuration
-is loaded and validated once at process startup. Missing credentials for any
-provider used by the active pipeline also fail startup immediately.
+Restart the backend after changing `config/runtime.toml` or an agent profile;
+runtime configuration is loaded and validated once at process startup. Missing
+credentials for a provider used by the active profile fail startup immediately.
 
 Structured LLM requests make up to three bounded provider attempts. Models
 without native schema enforcement receive the exact JSON Schema in their
@@ -199,37 +193,37 @@ pytest -q
 ## Orchestration
 
 USER UPLOAD
-    │
-    ▼
+│
+▼
 Generic Cleaning Service
-    │
-    ▼
+│
+▼
 Data Preparation Agent
-    │
-    ▼
+│
+▼
 Orchestrator Agent
-    │
-    ├──────────────┬──────────────────┐
-    ▼              ▼                  ▼
-KPI & Trend     Anomaly Detection   Forecasting
-Agent           Agent               Agent
-    │              │                  │
-    └──────────────┴──────────────────┘
-                   │
-                   ▼
-             Specialist Join
-                   │
-                   ▼
-         Insight Synthesis Agent
-                   │
-         ┌─────────┴──────────┐
-         ▼                    ▼
-Dashboard Generation   Retrieval Preparation
-Agent                  Agent
-         │                    │
-         ▼                    ▼
- Dashboard JSON       RAG Documents / Chunks
-         │                    │
-         └─────────┬──────────┘
-                   ▼
-          Supabase Persistence
+│
+├──────────────┬──────────────────┐
+▼ ▼ ▼
+KPI & Trend Anomaly Detection Forecasting
+Agent Agent Agent
+│ │ │
+└──────────────┴──────────────────┘
+│
+▼
+Specialist Join
+│
+▼
+Insight Synthesis Agent
+│
+┌─────────┴──────────┐
+▼ ▼
+Dashboard Generation Retrieval Preparation
+Agent Agent
+│ │
+▼ ▼
+Dashboard JSON RAG Documents / Chunks
+│ │
+└─────────┬──────────┘
+▼
+Supabase Persistence

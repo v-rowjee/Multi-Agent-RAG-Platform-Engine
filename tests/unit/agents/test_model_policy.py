@@ -15,8 +15,8 @@ def test_single_dashboard_usage_uses_the_configured_single_agent_model() -> None
     assert single_dashboard_model_usage() == [
         {
             "agent": "Business intelligence",
-            "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
-            "provider": "openrouter",
+            "model": "openai/gpt-oss-120b",
+            "provider": "groq",
             "executionStatus": "configured",
         }
     ]
@@ -36,7 +36,7 @@ def test_multi_dashboard_usage_lists_only_selected_specialists() -> None:
     assert {item["model"] for item in usage} == {
         "openai/gpt-oss-20b",
         "openai/gpt-oss-120b",
-        "nvidia/nemotron-3-super-120b-a12b:free",
+        "groq/compound",
         "amazon/chronos-2",
     }
     assert {item["executionStatus"] for item in usage} == {"configured"}

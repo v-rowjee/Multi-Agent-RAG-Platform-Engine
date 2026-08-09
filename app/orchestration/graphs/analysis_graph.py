@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+from time import perf_counter
 from typing import Any, Awaitable, Callable, Mapping, TypeAlias, cast
 
 from langgraph.graph import END, START, StateGraph
@@ -25,6 +27,36 @@ from app.orchestration.state import AnalysisState
 StateNodeLike: TypeAlias = StateNode | Callable[
     [dict[str, Any]], Awaitable[dict[str, Any]]
 ]
+
+logger = logging.getLogger(__name__)
+
+
+def _timed_node(name: str, action: StateNode) -> StateNode:
+    """Add consistent per-stage timing without changing graph behaviour."""
+
+    async def instrumented(state: AnalysisState) -> dict[str, Any]:
+        started_at = perf_counter()
+        session_id = state.get("session_id")
+        logger.info("Pipeline stage started stage=%s session_id=%s", name, session_id)
+        try:
+            result = await action(state)
+        except Exception:
+            logger.exception(
+                "Pipeline stage failed stage=%s session_id=%s latency_ms=%.1f",
+                name,
+                session_id,
+                (perf_counter() - started_at) * 1000,
+            )
+            raise
+        logger.info(
+            "Pipeline stage completed stage=%s session_id=%s latency_ms=%.1f",
+            name,
+            session_id,
+            (perf_counter() - started_at) * 1000,
+        )
+        return result
+
+    return instrumented
 
 
 def build_analysis_graph(
@@ -171,16 +203,16 @@ def build_analysis_graph(
         return await retrieval_preparation_handler(state)
 
     graph = StateGraph(AnalysisState)
-    graph.add_node("generic_cleaning", generic_cleaning_action)
-    graph.add_node("data_preparation", data_preparation_action)
-    graph.add_node("orchestrator", orchestrator_action)
-    graph.add_node("kpi_trend", kpi_trend_action)
-    graph.add_node("anomaly_detection", anomaly_detection_action)
-    graph.add_node("forecasting", forecasting_action)
-    graph.add_node("specialist_join", specialist_join_action)
-    graph.add_node("insight_synthesis", insight_synthesis_action)
-    graph.add_node("dashboard_generation", dashboard_generation_action)
-    graph.add_node("retrieval_preparation", retrieval_preparation_action)
+    graph.add_node("generic_cleaning", _timed_node("generic_cleaning", generic_cleaning_action))
+    graph.add_node("data_preparation", _timed_node("data_preparation", data_preparation_action))
+    graph.add_node("orchestrator", _timed_node("orchestrator", orchestrator_action))
+    graph.add_node("kpi_trend", _timed_node("kpi_trend", kpi_trend_action))
+    graph.add_node("anomaly_detection", _timed_node("anomaly_detection", anomaly_detection_action))
+    graph.add_node("forecasting", _timed_node("forecasting", forecasting_action))
+    graph.add_node("specialist_join", _timed_node("specialist_join", specialist_join_action))
+    graph.add_node("insight_synthesis", _timed_node("insight_synthesis", insight_synthesis_action))
+    graph.add_node("dashboard_generation", _timed_node("dashboard_generation", dashboard_generation_action))
+    graph.add_node("retrieval_preparation", _timed_node("retrieval_preparation", retrieval_preparation_action))
 
     graph.add_edge(START, "generic_cleaning")
     graph.add_edge("generic_cleaning", "data_preparation")

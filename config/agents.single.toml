@@ -1,0 +1,12 @@
+[agents.single_dashboard]
+provider = "groq"
+model = "openai/gpt-oss-120b"
+temperature = 0.0
+max_completion_tokens = 1000
+supports_response_format = false
+
+[agents.single_chat]
+provider = "groq"
+model = "openai/gpt-oss-120b"
+temperature = 0.0
+max_completion_tokens = 220

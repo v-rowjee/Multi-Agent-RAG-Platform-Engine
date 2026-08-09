@@ -3,17 +3,15 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import date, datetime
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
-from app.core.config import get_runtime_config
-
-_FORECASTING_POLICY = get_runtime_config().forecasting
-CHRONOS_MODEL_ID = _FORECASTING_POLICY.model
-MAX_CONTEXT = _FORECASTING_POLICY.max_context
-MAX_HORIZON = _FORECASTING_POLICY.max_horizon
+CHRONOS_MODEL_ID = "amazon/chronos-2"
+MAX_CONTEXT = 1024
+MAX_HORIZON = 256
 QUANTILE_LEVELS = [0.025, 0.5, 0.975]
 
 
@@ -31,6 +29,10 @@ class ChronosForecast:
 class ChronosService:
     def __init__(self) -> None:
         self._model: Any | None = None
+
+    def warm(self) -> None:
+        """Load Chronos once during startup instead of the first dashboard run."""
+        self._load_model()
 
     def _load_model(self) -> Any:
         if self._model is not None:
@@ -57,6 +59,8 @@ class ChronosService:
     def _timestamp(value: object) -> pd.Timestamp:
         if isinstance(value, pd.Period):
             return value.start_time
+        if not isinstance(value, (pd.Timestamp, np.datetime64, date, datetime, str, int, float)):
+            raise ChronosServiceError("Chronos-2 requires valid timestamps for every historical value.")
         timestamp = pd.Timestamp(value)
         if pd.isna(timestamp):
             raise ChronosServiceError("Chronos-2 requires valid timestamps for every historical value.")

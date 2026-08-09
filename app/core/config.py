@@ -13,13 +13,19 @@ from dotenv import load_dotenv
 
 PipelineMode = Literal["single", "multi"]
 AgentProvider = Literal["groq", "openrouter"]
+AgentProfile = Literal["groq", "mix"]
 ReasoningEffort = Literal["none", "low", "medium", "high"] | None
 
-CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "agents.toml"
+CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
+RUNTIME_CONFIG_PATH = CONFIG_DIR / "runtime.toml"
+# Retained as a public alias for callers that imported the old name.
+CONFIG_PATH = RUNTIME_CONFIG_PATH
+AGENT_PROFILES_DIR = CONFIG_DIR
+SINGLE_AGENT_CONFIG_PATH = CONFIG_DIR / "agents.single.toml"
 RAG_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "rag.toml"
 
 # Load environment variables once
-load_dotenv(CONFIG_PATH.parent.parent / ".env")
+load_dotenv(CONFIG_DIR.parent / ".env")
 
 
 class RuntimeConfigurationError(ValueError):
@@ -39,16 +45,9 @@ class AgentModelPolicy:
 
 
 @dataclass(frozen=True)
-class ForecastingPolicy:
-    model: str
-    max_context: int
-    max_horizon: int
-
-
-@dataclass(frozen=True)
 class RuntimeConfiguration:
     pipeline_mode: PipelineMode
-    forecasting: ForecastingPolicy
+    agent_profile: AgentProfile
     agents: Mapping[str, AgentModelPolicy]
 
 
@@ -180,26 +179,65 @@ def _get_agent_policy(name: str, data: dict[str, Any]) -> AgentModelPolicy:
     )
 
 
-def load_runtime_config(path: Path = CONFIG_PATH) -> RuntimeConfiguration:
+def _load_toml(path: Path, *, label: str) -> dict[str, Any]:
     try:
         with path.open("rb") as f:
             raw = tomllib.load(f)
     except FileNotFoundError as exc:
-        raise RuntimeConfigurationError(f"Agent configuration not found: {path}") from exc
+        raise RuntimeConfigurationError(f"{label} not found: {path}") from exc
     except tomllib.TOMLDecodeError as exc:
         raise RuntimeConfigurationError(f"Invalid TOML in {path}: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise RuntimeConfigurationError(f"{label} must contain a TOML object.")
+    return raw
 
-    pipeline = raw.get("pipeline", {})
-    if not isinstance(pipeline, dict):
-        raise RuntimeConfigurationError("'pipeline' must be a TOML table")
-    mode = _get_str(pipeline, "mode").lower()
-    if mode not in {"single", "multi"}:
-        raise RuntimeConfigurationError("pipeline.mode must be either 'single' or 'multi'")
 
+def _load_agent_policies(
+    raw: dict[str, Any],
+    *,
+    required: set[str],
+    label: str,
+) -> dict[str, AgentModelPolicy]:
     raw_agents = raw.get("agents", {})
     if not isinstance(raw_agents, dict):
-        raise RuntimeConfigurationError("'agents' must be a TOML table")
-    required = {
+        raise RuntimeConfigurationError(f"{label} 'agents' must be a TOML table")
+    configured = set(raw_agents)
+    missing = required - configured
+    unexpected = configured - required
+    if missing:
+        raise RuntimeConfigurationError(
+            f"{label} is missing required entries: {', '.join(sorted(missing))}"
+        )
+    if unexpected:
+        raise RuntimeConfigurationError(
+            f"{label} has unsupported entries: {', '.join(sorted(unexpected))}"
+        )
+    return {name: _get_agent_policy(name, raw_agents[name]) for name in required}
+
+
+def load_runtime_config(
+    path: Path = CONFIG_PATH,
+    *,
+    profiles_dir: Path = AGENT_PROFILES_DIR,
+) -> RuntimeConfiguration:
+    """Load global runtime settings and one complete, compatible agent profile."""
+    raw = _load_toml(path, label="Runtime configuration")
+
+    runtime = raw.get("runtime", {})
+    if not isinstance(runtime, dict):
+        raise RuntimeConfigurationError("'runtime' must be a TOML table")
+    mode = _get_str(runtime, "pipeline_mode").lower()
+    if mode not in {"single", "multi"}:
+        raise RuntimeConfigurationError("runtime.pipeline_mode must be either 'single' or 'multi'")
+    profile = _get_str(runtime, "agent_profile").lower()
+    if profile not in {"groq", "mix"}:
+        raise RuntimeConfigurationError(
+            "runtime.agent_profile must be either 'groq' or 'mix'"
+        )
+
+    profile_path = profiles_dir / f"agents.{profile}.toml"
+    profile_config = _load_toml(profile_path, label="Agent profile")
+    multi_agent_names = {
         "data_preparation",
         "orchestrator",
         "kpi_trend",
@@ -207,27 +245,27 @@ def load_runtime_config(path: Path = CONFIG_PATH) -> RuntimeConfiguration:
         "dashboard_generation",
         "insight_synthesis",
         "chat",
-        "single_dashboard",
-        "single_chat",
     }
-    missing = required - raw_agents.keys()
-    if missing:
-        raise RuntimeConfigurationError(
-            f"agents is missing required entries: {', '.join(sorted(missing))}"
+    single_agent_names = {"single_dashboard", "single_chat"}
+    agents = _load_agent_policies(
+        profile_config,
+        required=multi_agent_names,
+        label="Agent profile",
+    )
+    single_config = _load_toml(
+        SINGLE_AGENT_CONFIG_PATH,
+        label="Single-agent configuration",
+    )
+    agents.update(
+        _load_agent_policies(
+            single_config,
+            required=single_agent_names,
+            label="Single-agent configuration",
         )
-
-    agents = {name: _get_agent_policy(name, raw_agents[name]) for name in required}
-    forecasting = raw.get("forecasting", {})
-    if not isinstance(forecasting, dict):
-        raise RuntimeConfigurationError("'forecasting' must be a TOML table")
-
+    )
     return RuntimeConfiguration(
         pipeline_mode=mode,  # type: ignore[arg-type]
-        forecasting=ForecastingPolicy(
-            model=_get_str(forecasting, "model"),
-            max_context=_get_int(forecasting, "max_context", positive=True),
-            max_horizon=_get_int(forecasting, "max_horizon", positive=True),
-        ),
+        agent_profile=profile,  # type: ignore[arg-type]
         agents=agents,
     )
 

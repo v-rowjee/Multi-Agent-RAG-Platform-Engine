@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import math
 import json
 import logging
+import math
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -10,20 +10,21 @@ from typing import Any, Literal, TypedDict
 
 import numpy as np
 import pandas as pd
-from langchain_core.output_parsers import StrOutputParser
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnableLambda
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel, Field
 
-from app.schemas.api import BusinessIntelligenceAgentInput, DashboardResponse
 from app.core.config import agent_model_policy
 from app.core.llm import create_chat_model
 from app.core.prompt_loader import render_agent_prompts
-from app.rag.models import RerankedDocument, RetrievedDocument
 from app.rag.indexing.indexing_service import indexing_service
+from app.rag.models import RerankedDocument, RetrievedDocument
 from app.rag.retrieval.retriever import compact_profile_for_chat, retriever
-from app.services.data.series import infer_date_granularity, is_identifier_column
+from app.schemas.api import BusinessIntelligenceAgentInput, DashboardResponse
+from app.services.data.series import (infer_date_granularity,
+                                      is_identifier_column)
 
 logger = logging.getLogger(__name__)
 
@@ -757,7 +758,7 @@ class BusinessIntelligenceAgent:
     ) -> Narrative:
         summary = profile["summary"]
         return Narrative(
-            title=f"Business Intelligence Dashboard — {agent_input.fileName}",
+            title=f"Business Intelligence Dashboard - {agent_input.fileName}",
             executiveSummary=f"The dataset contains {summary['rowCount']:,} rows and {summary['columnCount']} columns.",
             businessSummary="The dashboard summarises the main measures, categories and time-based patterns in the dataset.",
             keyFindings=[

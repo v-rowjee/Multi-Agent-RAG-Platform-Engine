@@ -1,0 +1,6 @@
+[runtime]
+agent_profile = "groq"
+# agent_profile = "mix"
+
+pipeline_mode = "multi"
+# pipeline_mode = "single"

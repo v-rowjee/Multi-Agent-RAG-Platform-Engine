@@ -24,6 +24,7 @@ from app.agents.multi.orchestrator import (
     orchestrator_agent,
 )
 from app.core.config import configured_agent_models
+from app.schemas.dashboard import DashboardLayoutPlan
 from app.schemas.orchestration import AgentDecision, OrchestrationPlan
 from app.schemas.specialists import (
     KPIRequest,
@@ -454,10 +455,19 @@ def test_dashboard_has_non_temporal_charts_forecast_and_actions(
         "limitations": [],
     }
 
-    async def no_layout(_: dict[str, Any]):
-        raise RuntimeError("offline test")
+    async def incomplete_layout(_: dict[str, Any]) -> DashboardLayoutPlan:
+        return DashboardLayoutPlan(
+            title="Gym sales dashboard",
+            selected_kpi_ids=[
+                "kpi_net_revenue_gbp",
+                "kpi_profit_gbp",
+                "kpi_quantity",
+            ],
+            selected_trend_ids=["trend_net_revenue_gbp_month"],
+            include_forecast=True,
+        )
 
-    monkeypatch.setattr(dashboard_module, "_request_layout", no_layout)
+    monkeypatch.setattr(dashboard_module, "_request_layout", incomplete_layout)
     result, execution_status, failure_reason = asyncio.run(
         DashboardGenerationAgent().run_with_status(
             prepared,
@@ -466,14 +476,14 @@ def test_dashboard_has_non_temporal_charts_forecast_and_actions(
             {
                 "anomalies": [
                     {
-                        "id": "anomaly_profit_month",
-                        "metric": "profit_gbp",
+                        "id": "anomaly_revenue_month",
+                        "metric": "net_revenue_gbp",
                         "aggregation": "sum",
                         "granularity": "month",
                         "period": "2024-12",
-                        "observed_value": 1500.0,
+                        "observed_value": 1.0,
                         "severity": "warning",
-                        "evidence": "A profit anomaly, not a revenue anomaly.",
+                        "evidence": "A revenue anomaly aligned to the monthly timeline.",
                     }
                 ]
             },
@@ -486,7 +496,8 @@ def test_dashboard_has_non_temporal_charts_forecast_and_actions(
     assert dashboard.timeline is not None
     assert len(dashboard.timeline.forecast) == 3
     assert dashboard.timeline.forecastMetadata.target == "net_revenue_gbp"
-    assert dashboard.timeline.anomalies == []
+    assert len(dashboard.kpis) == 4
+    assert dashboard.timeline.anomalies[0].value == points[-1]["value"]
     assert dashboard.kpis[0].indicator.text == "Increased by 8.0% since Nov 2024"
     assert len(dashboard.supportingCharts) >= 2
     assert len({chart.type for chart in dashboard.supportingCharts}) == len(dashboard.supportingCharts)
@@ -496,8 +507,8 @@ def test_dashboard_has_non_temporal_charts_forecast_and_actions(
     )
     assert len(dashboard.recommendedActions) >= 3
     assert dashboard.executiveSummary == dashboard.analysis.businessSummary
-    assert execution_status == "fallback"
-    assert failure_reason == "The model request did not produce a usable response."
+    assert execution_status == "succeeded"
+    assert failure_reason is None
 
 
 def test_synthesis_fallback_is_grounded_and_has_three_actions() -> None:
@@ -539,11 +550,11 @@ def test_deterministic_routing_and_active_model_defaults() -> None:
         "data_preparation": "openai/gpt-oss-20b",
         "orchestrator": "openai/gpt-oss-20b",
         "kpi_trend": "openai/gpt-oss-120b",
-        "anomaly_detection": "nvidia/nemotron-3-super-120b-a12b:free",
-        "dashboard_generation": "nvidia/nemotron-3-super-120b-a12b:free",
-        "insight_synthesis": "nvidia/nemotron-3-super-120b-a12b:free",
+        "anomaly_detection": "openai/gpt-oss-20b",
+        "dashboard_generation": "openai/gpt-oss-20b",
+        "insight_synthesis": "openai/gpt-oss-120b",
         "chat": "openai/gpt-oss-120b",
-        "single_dashboard": "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "single_dashboard": "openai/gpt-oss-120b",
         "single_chat": "openai/gpt-oss-120b",
     }
 
@@ -746,7 +757,7 @@ def test_deterministic_capability_detection_uses_dataset_metadata() -> None:
     }
 
 
-def test_compound_request_size_is_calculated_before_provider_call(
+def test_orchestration_request_size_is_calculated_before_provider_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
@@ -755,7 +766,9 @@ def test_compound_request_size_is_calculated_before_provider_call(
         events.append("size")
         return 10
 
-    async def request(**_: Any) -> OrchestrationPlan:
+    async def request(**kwargs: Any) -> OrchestrationPlan:
+        assert kwargs["policy"].strict_json_schema is False
+        assert kwargs["policy"].reasoning_effort == "low"
         events.append("provider")
         return OrchestrationPlan()
 

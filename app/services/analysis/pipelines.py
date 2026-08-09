@@ -6,6 +6,7 @@ import hashlib
 import logging
 from dataclasses import replace
 from collections.abc import Mapping
+from time import perf_counter
 from typing import Any
 
 import pandas as pd
@@ -233,6 +234,7 @@ class AnalysisPipelineRunner:
             "model_invocations": [],
         }
         logger.info("Multi-agent pipeline started session_id=%s", session_id)
+        started_at = perf_counter()
         try:
             result = await (graph or self.graph).ainvoke(initial_state)
             dashboard_output = result.get("dashboard_output")
@@ -267,10 +269,17 @@ class AnalysisPipelineRunner:
             }
         except Exception:
             logger.exception(
-                "Unexpected multi-agent pipeline failure session_id=%s",
+                "Unexpected multi-agent pipeline failure session_id=%s latency_ms=%.1f",
                 session_id,
+                (perf_counter() - started_at) * 1000,
             )
             return self.failed_execution(session_id, dataset.id)
+        logger.info(
+            "Multi-agent pipeline completed session_id=%s status=%s latency_ms=%.1f",
+            session_id,
+            status,
+            (perf_counter() - started_at) * 1000,
+        )
         return PipelineExecution(
             response=response,
             workflow=workflow,

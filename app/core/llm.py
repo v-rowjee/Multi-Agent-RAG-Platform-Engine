@@ -498,16 +498,17 @@ async def request_structured(
         logger.info(
             "LLM request completed provider=%s model=%s schema=%s attempt=%s "
             "response_id=%s prompt_tokens=%s completion_tokens=%s "
-            "total_tokens=%s latency_ms=%.1f",
+                "total_tokens=%s retry_count=%s latency_ms=%.1f",
             policy.provider,
             policy.model,
             schema_name,
             attempt,
             getattr(response, "id", None),
             prompt_tokens,
-            completion_tokens,
-            total_tokens,
-            (perf_counter() - started_at) * 1000,
+                completion_tokens,
+                total_tokens,
+                attempt - 1,
+                (perf_counter() - started_at) * 1000,
         )
         finish_reason: str | None = None
         try:

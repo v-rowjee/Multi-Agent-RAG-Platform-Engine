@@ -6,21 +6,13 @@ import pytest
 import toons
 
 import app.core.prompt_loader as prompt_module
-from app.core.config import (
-    CONFIG_PATH,
-    RAG_CONFIG_PATH,
-    RuntimeConfigurationError,
-    get_runtime_config,
-    get_settings,
-    load_rag_config,
-    load_runtime_config,
-)
-from app.core.prompt_loader import (
-    PROMPTS_ROOT,
-    PromptTemplateError,
-    render_agent_prompts,
-    validate_prompt_bundles,
-)
+from app.core.config import (AGENT_PROFILES_DIR, CONFIG_PATH, RAG_CONFIG_PATH,
+                             RuntimeConfigurationError, get_runtime_config,
+                             get_settings, load_rag_config,
+                             load_runtime_config)
+from app.core.prompt_loader import (PROMPTS_ROOT, PromptTemplateError,
+                                    render_agent_prompts,
+                                    validate_prompt_bundles)
 from app.schemas.data_preparation import PreparationPlan
 
 
@@ -28,6 +20,7 @@ def test_checked_in_configuration_uses_the_aligned_agent_models() -> None:
     config = load_runtime_config()
 
     assert config.pipeline_mode == "multi"
+    assert config.agent_profile == "groq"
     assert {
         name: (policy.provider, policy.model)
         for name, policy in config.agents.items()
@@ -36,27 +29,22 @@ def test_checked_in_configuration_uses_the_aligned_agent_models() -> None:
         "data_preparation": ("groq", "openai/gpt-oss-20b"),
         "orchestrator": ("groq", "openai/gpt-oss-20b"),
         "kpi_trend": ("groq", "openai/gpt-oss-120b"),
-        "anomaly_detection": (
-            "openrouter",
-            "nvidia/nemotron-3-super-120b-a12b:free",
-        ),
-        "dashboard_generation": (
-            "openrouter",
-            "nvidia/nemotron-3-super-120b-a12b:free",
-        ),
-        "insight_synthesis": (
-            "openrouter",
-            "nvidia/nemotron-3-super-120b-a12b:free",
-        ),
+        "anomaly_detection": ("groq", "openai/gpt-oss-20b"),
+        "dashboard_generation": ("groq", "openai/gpt-oss-20b"),
+        "insight_synthesis": ("groq", "openai/gpt-oss-120b"),
         "chat": ("groq", "openai/gpt-oss-120b"),
     }
-    assert config.forecasting.model == "amazon/chronos-2"
     assert config.agents["data_preparation"].strict_json_schema is False
-    assert config.agents["chat"].timeout_seconds == 15
+    assert config.agents["chat"].timeout_seconds == 120
     assert config.agents["anomaly_detection"].supports_response_format is True
-    assert config.agents["insight_synthesis"].strict_json_schema is True
-    assert config.agents["dashboard_generation"].strict_json_schema is True
-    assert config.agents["dashboard_generation"].timeout_seconds == 60
+    assert config.agents["orchestrator"].reasoning_effort == "low"
+    assert config.agents["insight_synthesis"].strict_json_schema is False
+    assert config.agents["insight_synthesis"].reasoning_effort == "medium"
+    assert config.agents["insight_synthesis"].max_completion_tokens == 2000
+    assert config.agents["dashboard_generation"].strict_json_schema is False
+    assert config.agents["dashboard_generation"].reasoning_effort == "low"
+    assert config.agents["dashboard_generation"].max_completion_tokens == 1800
+    assert config.agents["dashboard_generation"].timeout_seconds == 120
 
 
 def test_environment_does_not_override_versioned_agent_configuration(monkeypatch) -> None:
@@ -124,47 +112,67 @@ def test_invalid_rag_configuration_is_rejected(tmp_path: Path) -> None:
 
 
 def test_invalid_pipeline_mode_is_rejected(tmp_path: Path) -> None:
-    content = CONFIG_PATH.read_text(encoding="utf-8").replace('mode = "multi"', 'mode = "invalid"')
-    config_path = tmp_path / "agents.toml"
+    content = CONFIG_PATH.read_text(encoding="utf-8").replace(
+        'pipeline_mode = "multi"',
+        'pipeline_mode = "invalid"',
+    )
+    config_path = tmp_path / "runtime.toml"
     config_path.write_text(content, encoding="utf-8")
 
-    with pytest.raises(RuntimeConfigurationError, match="pipeline.mode"):
+    with pytest.raises(RuntimeConfigurationError, match="runtime.pipeline_mode"):
         load_runtime_config(config_path)
 
 
 def test_invalid_agent_provider_and_model_are_rejected(tmp_path: Path) -> None:
-    content = CONFIG_PATH.read_text(encoding="utf-8").replace(
+    runtime_path = tmp_path / "runtime.toml"
+    runtime_path.write_text(CONFIG_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+    profile_path = tmp_path / "agents.groq.toml"
+    content = (AGENT_PROFILES_DIR / "agents.groq.toml").read_text(encoding="utf-8").replace(
         'provider = "groq"', 'provider = "unsupported"', 1
     )
-    config_path = tmp_path / "agents.toml"
-    config_path.write_text(content, encoding="utf-8")
+    profile_path.write_text(content, encoding="utf-8")
 
     with pytest.raises(RuntimeConfigurationError, match="provider"):
-        load_runtime_config(config_path)
+        load_runtime_config(runtime_path, profiles_dir=tmp_path)
 
-    config_path.write_text(
-        CONFIG_PATH.read_text(encoding="utf-8").replace(
+    profile_path.write_text(
+        (AGENT_PROFILES_DIR / "agents.groq.toml").read_text(encoding="utf-8").replace(
             'model = "openai/gpt-oss-20b"', 'model = ""', 1
         ),
         encoding="utf-8",
     )
     with pytest.raises(RuntimeConfigurationError, match="model"):
-        load_runtime_config(config_path)
+        load_runtime_config(runtime_path, profiles_dir=tmp_path)
 
 
-def test_openrouter_can_be_selected_per_agent(tmp_path: Path) -> None:
+def test_mix_profile_can_be_selected_from_runtime_configuration(tmp_path: Path) -> None:
     content = CONFIG_PATH.read_text(encoding="utf-8").replace(
-        'provider = "groq"',
-        'provider = "openrouter"',
-        1,
+        'agent_profile = "groq"',
+        'agent_profile = "mix"',
     )
-    config_path = tmp_path / "agents.toml"
+    config_path = tmp_path / "runtime.toml"
     config_path.write_text(content, encoding="utf-8")
 
     config = load_runtime_config(config_path)
 
-    assert config.agents["data_preparation"].provider == "openrouter"
-    assert config.agents["kpi_trend"].provider == "groq"
+    assert config.agent_profile == "mix"
+    assert config.agents["data_preparation"].provider == "groq"
+    assert config.agents["anomaly_detection"].provider == "openrouter"
+
+
+def test_each_checked_in_agent_profile_is_complete_and_loadable(tmp_path: Path) -> None:
+    for profile in ("groq", "mix"):
+        runtime_path = tmp_path / f"runtime-{profile}.toml"
+        runtime_path.write_text(
+            CONFIG_PATH.read_text(encoding="utf-8").replace(
+                'agent_profile = "groq"',
+                f'agent_profile = "{profile}"',
+            ),
+            encoding="utf-8",
+        )
+        config = load_runtime_config(runtime_path)
+        assert config.agent_profile == profile
+        assert len(config.agents) == 9
 
 
 def test_prompt_bundles_validate_and_render_structured_toon() -> None:

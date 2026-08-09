@@ -1,18 +1,9 @@
-[pipeline]
-mode = "multi"
-
-[forecasting]
-model = "amazon/chronos-2"
-max_context = 1024
-max_horizon = 256
-
 [agents.data_preparation]
 provider = "groq"
 model = "openai/gpt-oss-20b"
 temperature = 0.1
 max_completion_tokens = 800
 reasoning_effort = "low"
-strict_json_schema = false
 
 [agents.orchestrator]
 provider = "groq"
@@ -20,7 +11,6 @@ model = "openai/gpt-oss-20b"
 temperature = 0.0
 max_completion_tokens = 1000
 reasoning_effort = "low"
-strict_json_schema = true
 
 [agents.kpi_trend]
 provider = "groq"
@@ -28,7 +18,6 @@ model = "openai/gpt-oss-120b"
 temperature = 0.1
 max_completion_tokens = 1400
 reasoning_effort = "low"
-strict_json_schema = true
 
 [agents.anomaly_detection]
 provider = "openrouter"
@@ -37,25 +26,22 @@ temperature = 0.1
 max_completion_tokens = 1200
 timeout_seconds = 60
 reasoning_effort = "low"
-strict_json_schema = true
 
 [agents.dashboard_generation]
 provider = "openrouter"
 model = "nvidia/nemotron-3-super-120b-a12b:free"
 temperature = 0.1
-max_completion_tokens = 2500
+max_completion_tokens = 1800
 timeout_seconds = 60
 reasoning_effort = "none"
-strict_json_schema = true
 
 [agents.insight_synthesis]
 provider = "openrouter"
 model = "nvidia/nemotron-3-super-120b-a12b:free"
 temperature = 0.1
-max_completion_tokens = 5000
+max_completion_tokens = 2000
 timeout_seconds = 90
 reasoning_effort = "none"
-strict_json_schema = true
 
 [agents.chat]
 provider = "groq"
@@ -64,20 +50,4 @@ temperature = 0.1
 max_completion_tokens = 600
 timeout_seconds = 15
 reasoning_effort = "none"
-strict_json_schema = false
 supports_response_format = false
-
-[agents.single_dashboard]
-provider = "openrouter"
-model = "nvidia/nemotron-3-ultra-550b-a55b:free"
-temperature = 0.0
-max_completion_tokens = 1000
-strict_json_schema = false
-supports_response_format = false
-
-[agents.single_chat]
-provider = "groq"
-model = "openai/gpt-oss-120b"
-temperature = 0.0
-max_completion_tokens = 220
-strict_json_schema = false

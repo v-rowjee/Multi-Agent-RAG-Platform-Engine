@@ -7,6 +7,7 @@ from typing import Literal, TypedDict
 from typing_extensions import NotRequired
 
 from app.core.config import get_runtime_config
+from app.services.forecasting.chronos import CHRONOS_MODEL_ID
 
 
 class ModelUsage(TypedDict):
@@ -64,10 +65,9 @@ def forecasting_model_usage(
     execution_status: ModelExecutionStatus,
 ) -> ModelUsage:
     """Build execution metadata for the configured forecasting engine."""
-    runtime = get_runtime_config()
     return {
         "agent": _MULTI_AGENT_LABELS["forecasting"],
-        "model": runtime.forecasting.model,
+        "model": CHRONOS_MODEL_ID,
         "provider": "engine",
         "executionStatus": execution_status,
     }
@@ -129,7 +129,7 @@ def multi_dashboard_model_usage(
             usage.append(
                 {
                     "agent": label,
-                    "model": runtime.forecasting.model,
+                    "model": CHRONOS_MODEL_ID,
                     "provider": "engine",
                     "executionStatus": "configured",
                 }

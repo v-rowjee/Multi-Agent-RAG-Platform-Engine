@@ -347,6 +347,9 @@ async def _request_plan(
             f"{max_payload_bytes} bytes"
         )
     return await request_structured(
+        # Use the configured JSON-object policy and validate its response
+        # locally.  This avoids coupling orchestration to provider-specific
+        # JSON Schema support.
         policy=agent_model_policy("orchestrator"),
         response_model=OrchestrationPlan,
         schema_name="orchestration_plan",

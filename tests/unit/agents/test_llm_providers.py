@@ -392,14 +392,13 @@ def test_only_the_selected_provider_credential_is_required(
         create_chat_model(_policy("openrouter"))
 
 
-def test_active_provider_credentials_are_validated_at_startup(
+def test_only_groq_credentials_are_required_at_startup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("GROQ_API_KEY", "groq-secret")
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
 
-    with pytest.raises(ProviderConfigurationError, match="OPENROUTER_API_KEY"):
-        validate_active_provider_credentials()
+    validate_active_provider_credentials()
 
 
 def test_provider_errors_are_wrapped_without_exposing_sensitive_values(

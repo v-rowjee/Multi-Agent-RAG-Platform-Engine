@@ -32,6 +32,10 @@ class SentenceTransformerEmbeddingService:
         vectors = self._encode([f"{prefix}{text}"])
         return vectors[0] if vectors else []
 
+    def warm(self) -> None:
+        """Load the embedding model once during startup."""
+        self._model_instance()
+
     def _encode(self, texts: list[str]) -> list[list[float]]:
         encode_options: dict[str, object] = {
             "batch_size": _EMBEDDING_POLICY.batch_size,

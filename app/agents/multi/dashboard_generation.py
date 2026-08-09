@@ -28,7 +28,7 @@ from app.services.data.series import (
     value_format_for_measure,
 )
 
-MAX_DASHBOARD_KPIS, MAX_DASHBOARD_TRENDS = 8, 3
+MAX_DASHBOARD_KPIS, MAX_DASHBOARD_TRENDS = 4, 3
 MAX_DASHBOARD_ANOMALIES, MAX_DASHBOARD_INSIGHTS = 6, 6
 MAX_DASHBOARD_RECOMMENDATIONS = 5
 MIN_SUPPORTING_CHARTS, MAX_SUPPORTING_CHARTS = 2, 4
@@ -391,6 +391,18 @@ def _validated_plan(
         selected = _dedupe_selected(values, valid, limit)
         return selected or _dedupe_selected(defaults, valid, limit)
 
+    def select_kpis() -> list[str]:
+        valid = {str(item["id"]) for item in kpis if item.get("id")}
+        return _dedupe_selected(
+            [
+                *plan.selected_kpi_ids,
+                *fallback.selected_kpi_ids,
+                *_ids(kpis, MAX_DASHBOARD_KPIS),
+            ],
+            valid,
+            MAX_DASHBOARD_KPIS,
+        )
+
     sections: list[DashboardSection] = []
     seen_sections: set[str] = set()
     for section in plan.section_order:
@@ -399,12 +411,7 @@ def _validated_plan(
             seen_sections.add(section.id)
     return plan.model_copy(
         update={
-            "selected_kpi_ids": select(
-                plan.selected_kpi_ids,
-                kpis,
-                fallback.selected_kpi_ids,
-                MAX_DASHBOARD_KPIS,
-            ),
+            "selected_kpi_ids": select_kpis(),
             "selected_trend_ids": select(
                 plan.selected_trend_ids,
                 trends,
@@ -878,6 +885,9 @@ def _build_dashboard(
             for point in trend.get("points", [])
         ]
         actual_periods = {point["period"] for point in actual}
+        actual_values_by_period = {
+            point["period"]: point["value"] for point in actual
+        }
         forecast_output = forecasting_output or {}
         forecast_ok = bool(
             plan.include_forecast
@@ -915,7 +925,7 @@ def _build_dashboard(
                     "id": str(anomaly["id"]),
                     "period": period,
                     "label": period,
-                    "value": anomaly.get("observed_value"),
+                    "value": actual_values_by_period[period],
                     "severity": {
                         "informational": "info",
                         "warning": "warning",
