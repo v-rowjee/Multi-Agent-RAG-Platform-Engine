@@ -24,7 +24,7 @@ from app.agents.multi.orchestrator import (
     orchestrator_agent,
 )
 from app.core.config import configured_agent_models
-from app.schemas.dashboard import DashboardLayoutPlan
+from app.schemas.dashboard import DashboardLayoutPlan, SupportingChartSpec
 from app.schemas.orchestration import AgentDecision, OrchestrationPlan
 from app.schemas.specialists import (
     KPIRequest,
@@ -499,7 +499,7 @@ def test_dashboard_has_non_temporal_charts_forecast_and_actions(
     assert len(dashboard.kpis) == 4
     assert dashboard.timeline.anomalies[0].value == points[-1]["value"]
     assert dashboard.kpis[0].indicator.text == "Increased by 8.0% since Nov 2024"
-    assert len(dashboard.supportingCharts) >= 2
+    assert len(dashboard.supportingCharts) == 4
     assert len({chart.type for chart in dashboard.supportingCharts}) == len(dashboard.supportingCharts)
     assert all(
         not any(token in chart.title.lower() for token in ("year", "quarter", "month"))
@@ -509,6 +509,61 @@ def test_dashboard_has_non_temporal_charts_forecast_and_actions(
     assert dashboard.executiveSummary == dashboard.analysis.businessSummary
     assert execution_status == "succeeded"
     assert failure_reason is None
+
+
+def test_chart_selection_replaces_redundant_model_specs_with_complementary_charts(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "sales.csv"
+    frame = _rows()
+    frame.to_csv(path, index=False)
+    prepared = _prepared(path)
+
+    # All four proposals are valid JSON, but three repeat the same breakdown.
+    # The quality gate should retain only one and use the deterministic catalog
+    # to fill the dashboard with distinct analytical relationships.
+    proposed = [
+        SupportingChartSpec(
+            id="bar_category_revenue",
+            title="Revenue by category",
+            type="bar",
+            dimension="product_category",
+            measure="net_revenue_gbp",
+        ),
+        SupportingChartSpec(
+            id="horizontal_category_revenue",
+            title="Revenue by category",
+            type="horizontalBar",
+            dimension="product_category",
+            measure="net_revenue_gbp",
+        ),
+        SupportingChartSpec(
+            id="donut_category_revenue",
+            title="Revenue share by category",
+            type="donut",
+            dimension="product_category",
+            measure="net_revenue_gbp",
+        ),
+        SupportingChartSpec(
+            id="stacked_category_revenue_profit",
+            title="Revenue and profit by category",
+            type="stackedBar",
+            dimension="product_category",
+            measure="net_revenue_gbp",
+            secondary_measure="profit_gbp",
+        ),
+    ]
+
+    selected = dashboard_module._validated_chart_specs(proposed, prepared, frame)
+
+    assert len(selected) == 4
+    assert len({spec.type for spec in selected}) == 4
+    categorical_keys = [
+        (spec.dimension, spec.measure, spec.secondary_measure)
+        for spec in selected
+        if spec.type != "scatter"
+    ]
+    assert len(categorical_keys) == len(set(categorical_keys))
 
 
 def test_synthesis_fallback_is_grounded_and_has_three_actions() -> None:

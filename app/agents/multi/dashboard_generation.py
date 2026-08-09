@@ -32,6 +32,7 @@ MAX_DASHBOARD_KPIS, MAX_DASHBOARD_TRENDS = 4, 3
 MAX_DASHBOARD_ANOMALIES, MAX_DASHBOARD_INSIGHTS = 6, 6
 MAX_DASHBOARD_RECOMMENDATIONS = 5
 MIN_SUPPORTING_CHARTS, MAX_SUPPORTING_CHARTS = 2, 4
+TARGET_SUPPORTING_CHARTS = 4
 MAX_SCATTER_POINTS = 200
 SUPPORTED_CHART_TYPES = {
     "bar",
@@ -77,13 +78,10 @@ def _chart_candidates(
         )
         if isinstance(item, dict) and item.get("name")
     }
-    dimensions = [
-        str(value)
-        for value in prepared.get("dimension_candidates") or []
-        if value in df
-        and not is_temporal_dimension(str(value), prepared)
-        and 2 <= df[str(value)].nunique(dropna=True) <= 30
-    ]
+    # Present the planner with the same business-first ordering used by the
+    # deterministic fallback.  Raw input-column order made otherwise valid
+    # plans gravitate toward incidental fields rather than useful breakdowns.
+    dimensions = _ranked_dimensions(prepared, df)
     measures = ranked_measures(prepared, df)
     return {
         "dimensions": [
@@ -103,8 +101,10 @@ def _chart_candidates(
             for value in measures[:16]
         ],
         "requirements": {
-            "count": "2-4",
+            "target_count": TARGET_SUPPORTING_CHARTS,
+            "minimum_count": MIN_SUPPORTING_CHARTS,
             "unique_types": True,
+            "unique_categorical_comparisons": True,
             "allowed_types": sorted(SUPPORTED_CHART_TYPES),
             "forbid_temporal_dimensions": True,
         },
@@ -330,12 +330,35 @@ def _validated_chart_specs(
 ) -> list[SupportingChartSpec]:
     output: list[SupportingChartSpec] = []
     used_types: set[str] = set()
+    used_comparisons: set[tuple[str, ...]] = set()
+
+    def comparison_key(spec: SupportingChartSpec) -> tuple[str, ...]:
+        """Identify the data relationship a chart communicates.
+
+        Different chart types are not automatically different analysis: a bar,
+        horizontal bar, and donut built from the same dimension and measure all
+        repeat the same breakdown.  Reserve the four dashboard slots for
+        complementary questions whenever the dataset offers alternatives.
+        """
+        if spec.type == "scatter":
+            return ("scatter", str(spec.x_measure), str(spec.y_measure))
+        return (
+            "categorical",
+            str(spec.dimension),
+            str(spec.measure),
+            str(spec.secondary_measure or ""),
+        )
+
     for spec in [*proposed, *_fallback_chart_specs(prepared, df)]:
         validated = _valid_chart_spec(spec, prepared, df)
         if not validated or validated.type in used_types:
             continue
+        key = comparison_key(validated)
+        if key in used_comparisons:
+            continue
         output.append(validated)
         used_types.add(validated.type)
+        used_comparisons.add(key)
         if len(output) >= MAX_SUPPORTING_CHARTS:
             break
     return output

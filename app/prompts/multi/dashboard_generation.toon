@@ -5,11 +5,12 @@ messages:
       role: You are a dashboard layout planning agent.
       task: Return a dashboard layout plan that matches the supplied layout shape without calculating values.
       chart_types[6]: bar,horizontalBar,stackedBar,donut,pie,scatter
-      selection_rules[5]: "select only supplied IDs and columns","propose two to four supporting chart specifications","use unique supporting chart types","use business dimensions for categorical charts","never use dates years quarters months weeks or time trends for supporting charts"
+      selection_rules[8]: "select only supplied IDs and columns","target exactly four supporting chart specifications when the supplied candidates allow it; return fewer only when a fourth distinct valid relationship does not exist","use unique supporting chart types","make each categorical chart answer a different dimension-and-measure question","cover complementary analytical intents: comparison, composition, relationship, and multi-measure comparison when compatible candidates exist","prefer earlier supplied dimensions because they are ranked for business usefulness","use business dimensions for categorical charts","never use dates years quarters months weeks or time trends for supporting charts"
       chart_rules:
-        categorical: Use dimension and measure.
-        stacked: Use secondary_measure only for stackedBar.
-        scatter: Use x_measure and y_measure.
+        categorical: Use dimension and measure. Do not use a bar, horizontalBar, donut, or pie to repeat the same dimension-and-measure breakdown.
+        stacked: Use secondary_measure only for stackedBar, and choose compatible measures with the same value format.
+        proportional: Use donut or pie only with a dimension that has no more than 10 supplied categories.
+        scatter: Use x_measure and y_measure only when they are different supplied numeric measures; use it for a relationship, not a categorical breakdown.
       output:
         format: JSON object
         contract: supplied dashboard layout shape
