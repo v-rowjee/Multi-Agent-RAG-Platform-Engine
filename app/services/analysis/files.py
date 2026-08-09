@@ -21,11 +21,13 @@ from app.services.persistence.analysis import DatasetRecord
 
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MAX_UPLOAD_FILES = 5
-ALLOWED_EXTENSIONS = {".csv"}
+ALLOWED_EXTENSIONS = {".csv", ".xlsx"}
 PARQUET_MIME_TYPE = "application/vnd.apache.parquet"
 ALLOWED_MIME_TYPES = {
-    "text/csv",
-    "application/csv",
+    ".csv": {"text/csv", "application/csv"},
+    ".xlsx": {
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    },
 }
 
 
@@ -59,11 +61,11 @@ class DatasetFileService:
         extension: str | None = None,
     ) -> None:
         extension = extension or Path(file_name).suffix.lower()
-        if not file_name or file_name == ".csv":
+        if not file_name or Path(file_name).stem == "":
             raise InvalidUploadError("The uploaded file must have a valid name.")
         if extension not in ALLOWED_EXTENSIONS:
-            raise InvalidUploadError("Only CSV files are supported.")
-        if mime_type and mime_type not in ALLOWED_MIME_TYPES:
+            raise InvalidUploadError("Only CSV and XLSX files are supported.")
+        if mime_type and mime_type not in ALLOWED_MIME_TYPES[extension]:
             raise InvalidUploadError("The uploaded file type is not supported.")
 
     @staticmethod

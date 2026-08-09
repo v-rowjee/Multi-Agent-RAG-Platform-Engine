@@ -363,6 +363,7 @@ class AnalysisExecutionPersistenceService:
     def persistent_cleaning_report(value: Any) -> dict[str, Any]:
         report = dict(value) if isinstance(value, dict) else {}
         report.pop("cleaned_file_path", None)
+        report.pop("cleaned_storage_path", None)
         return report
 
     @classmethod

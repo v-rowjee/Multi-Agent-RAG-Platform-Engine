@@ -328,7 +328,7 @@ class DatasetUploadService:
             "column_count": item.inspection.column_count,
             "generic_cleaning_report": {
                 **item.generic_cleaning_report,
-                "cleaned_file_path": storage_path,
+                "cleaned_storage_path": storage_path,
             },
         }
         if legacy:

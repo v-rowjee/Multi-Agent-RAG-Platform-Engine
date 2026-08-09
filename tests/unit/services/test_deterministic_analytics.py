@@ -67,7 +67,10 @@ def test_total_revenue_is_derived_from_price_and_volume(tmp_path: Path) -> None:
     assert "Sum Revenue: $16,420.00" in result.text
     assert "Price_USD, Sales_Volume" in result.text
     assert result.direct_answer is not None
+    assert "The sum Revenue across matching records" in result.direct_answer
     assert "Revenue` derived as `Price_USD` × `Sales_Volume`" in result.direct_answer
+    assert "**Pandas query:**" in result.direct_answer
+    assert "**Columns used:** `Price_USD`, `Sales_Volume`." in result.direct_answer
 
 
 def test_best_product_defaults_to_revenue_performance(tmp_path: Path) -> None:
@@ -77,6 +80,7 @@ def test_best_product_defaults_to_revenue_performance(tmp_path: Path) -> None:
     assert "Top Revenue by Product: Premium: $10,950.00" in result.text
     assert result.direct_answer is not None
     assert "`Product`" in result.direct_answer
+    assert "groupby('Product')" in result.direct_answer
 
 
 def test_generic_forecast_question_forecasts_next_year_revenue(tmp_path: Path) -> None:

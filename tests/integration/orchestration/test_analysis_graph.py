@@ -44,7 +44,12 @@ def _node(
     return run
 
 
-def _run_graph(selected_agents: list[str]) -> tuple[dict[str, Any], list[str]]:
+def _run_graph(
+    selected_agents: list[str],
+    *,
+    file_name: str | None = None,
+    use_default_forecasting: bool = False,
+) -> tuple[dict[str, Any], list[str]]:
     events: list[str] = []
     overrides = {
         "generic_cleaning": _node("generic_cleaning", events),
@@ -68,11 +73,6 @@ def _run_graph(selected_agents: list[str]) -> tuple[dict[str, Any], list[str]]:
             events,
             {"anomaly_output": {"anomalies": []}},
         ),
-        "forecasting": _node(
-            "forecasting",
-            events,
-            {"forecasting_output": {"forecast": []}},
-        ),
         "specialist_join": _node("specialist_join", events),
         "insight_synthesis": _node(
             "insight_synthesis",
@@ -89,22 +89,26 @@ def _run_graph(selected_agents: list[str]) -> tuple[dict[str, Any], list[str]]:
             events,
             {"retrieval_documents": []},
         ),
-        "output_join": _node("output_join", events),
     }
-    graph = build_analysis_graph(node_overrides=overrides)
-    result = asyncio.run(
-        graph.ainvoke(
-            {
-                "session_id": "session",
-                "dataset_id": "session",
-                "warnings": [],
-                "errors": [],
-                "completed_agents": [],
-                "failed_agents": [],
-                "skipped_agents": [],
-            }
+    if not use_default_forecasting:
+        overrides["forecasting"] = _node(
+            "forecasting",
+            events,
+            {"forecasting_output": {"forecast": []}},
         )
-    )
+    graph = build_analysis_graph(node_overrides=overrides)
+    initial_state: dict[str, Any] = {
+        "session_id": "session",
+        "dataset_id": "session",
+        "warnings": [],
+        "errors": [],
+        "completed_agents": [],
+        "failed_agents": [],
+        "skipped_agents": [],
+    }
+    if file_name is not None:
+        initial_state["file_name"] = file_name
+    result = asyncio.run(graph.ainvoke(initial_state))
     return result, events
 
 
@@ -116,27 +120,72 @@ def _run_graph(selected_agents: list[str]) -> tuple[dict[str, Any], list[str]]:
         [],
     ],
 )
-def test_capability_routing_and_joins_execute_once(
+def test_specialist_fan_out_and_terminal_branches_execute_once(
     selected_agents: list[str],
 ) -> None:
-    _, events = _run_graph(selected_agents)
+    result, events = _run_graph(selected_agents)
 
     for specialist in ("kpi_trend", "anomaly_detection", "forecasting"):
-        assert events.count(specialist) == (
-            1 if specialist in selected_agents else 0
-        )
+        assert events.count(specialist) == 1
     assert events.count("specialist_join") == 1
     assert events.count("insight_synthesis") == 1
-    assert events.count("output_join") == 1
+    assert events.count("dashboard_generation") == 1
+    assert events.count("retrieval_preparation") == 1
+    assert result["dashboard_output"] == {}
+    assert result["retrieval_documents"] == []
 
     specialist_positions = [
-        events.index(agent) for agent in selected_agents
+        events.index(agent)
+        for agent in ("kpi_trend", "anomaly_detection", "forecasting")
     ]
-    if specialist_positions:
-        assert max(specialist_positions) < events.index("specialist_join")
+    assert max(specialist_positions) < events.index("specialist_join")
     assert events.index("specialist_join") < events.index("insight_synthesis")
-    assert events.index("dashboard_generation") < events.index("retrieval_preparation")
-    assert events.index("retrieval_preparation") < events.index("output_join")
+    assert events.index("insight_synthesis") < events.index("dashboard_generation")
+    assert events.index("insight_synthesis") < events.index("retrieval_preparation")
+
+
+def test_non_forecastable_plan_completes_the_forecasting_branch_as_skipped() -> None:
+    result, events = _run_graph(
+        ["kpi_trend", "anomaly_detection"],
+        use_default_forecasting=True,
+    )
+
+    assert result["forecasting_output"]["status"] == "skipped"
+    assert result["forecasting_output"]["historical"] == []
+    assert result["forecasting_output"]["forecast"] == []
+    assert "forecasting" in result["completed_agents"]
+    assert "forecasting" in result["skipped_agents"]
+    assert events.count("kpi_trend") == 1
+    assert events.count("anomaly_detection") == 1
+    assert events.count("specialist_join") == 1
+    assert events.count("insight_synthesis") == 1
+
+
+def test_analysis_state_preserves_dataset_file_name() -> None:
+    result, _ = _run_graph([], file_name="sales.xlsx")
+
+    assert result["file_name"] == "sales.xlsx"
+
+
+def test_graph_uses_explicit_specialist_fan_in_and_two_terminal_branches() -> None:
+    edges = {
+        (edge.source, edge.target)
+        for edge in build_analysis_graph().get_graph().edges
+    }
+
+    assert {
+        ("orchestrator", "kpi_trend"),
+        ("orchestrator", "anomaly_detection"),
+        ("orchestrator", "forecasting"),
+        ("kpi_trend", "specialist_join"),
+        ("anomaly_detection", "specialist_join"),
+        ("forecasting", "specialist_join"),
+        ("insight_synthesis", "dashboard_generation"),
+        ("insight_synthesis", "retrieval_preparation"),
+        ("dashboard_generation", "__end__"),
+        ("retrieval_preparation", "__end__"),
+    } <= edges
+    assert all("output_join" not in edge for edge in edges)
 
 
 def test_optional_specialist_exception_reaches_output_as_failure_state() -> None:
@@ -157,6 +206,12 @@ def test_optional_specialist_exception_reaches_output_as_failure_state() -> None
             {"orchestration_plan": {"selected_agents": ["kpi_trend"]}},
         ),
         "kpi_trend": failing_kpi,
+        "anomaly_detection": _node(
+            "anomaly_detection", events, {"anomaly_output": {"anomalies": []}}
+        ),
+        "forecasting": _node(
+            "forecasting", events, {"forecasting_output": {"forecast": []}}
+        ),
         "specialist_join": _node("specialist_join", events),
         "insight_synthesis": _node(
             "insight_synthesis", events, {"synthesis_output": {}}
@@ -167,7 +222,6 @@ def test_optional_specialist_exception_reaches_output_as_failure_state() -> None
         "retrieval_preparation": _node(
             "retrieval_preparation", events, {"retrieval_documents": []}
         ),
-        "output_join": _node("output_join", events),
     }
     graph = build_analysis_graph(node_overrides=overrides)
     result = asyncio.run(
@@ -187,5 +241,7 @@ def test_optional_specialist_exception_reaches_output_as_failure_state() -> None
     assert "kpi_trend" in result["failed_agents"]
     assert result["kpi_trend_output"]["status"] == "partial"
     assert events.count("specialist_join") == 1
-    assert events.count("output_join") == 1
+    assert events.count("insight_synthesis") == 1
+    assert events.count("dashboard_generation") == 1
+    assert events.count("retrieval_preparation") == 1
 

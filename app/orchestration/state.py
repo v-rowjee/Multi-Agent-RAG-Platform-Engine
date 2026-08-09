@@ -5,12 +5,27 @@ import pandas as pd
 from typing_extensions import TypedDict
 
 
+class SourceDatasetState(TypedDict):
+    """Stable provenance for a DataFrame included in a workspace analysis."""
+
+    dataset_id: str
+    file_name: str
+    row_count: int | None
+    column_count: int | None
+
+
 class AnalysisState(TypedDict, total=False):
     session_id: str
     dataset_id: str
+    # LangGraph keeps only fields declared in this schema.  This must remain
+    # explicit so preparation, dashboard, and retrieval metadata retain the
+    # display name supplied by the pipeline runner.
+    file_name: str
     business_description: str | None
-    source_datasets: list[dict[str, Any]]
+    source_datasets: list[SourceDatasetState]
 
+    # Runtime-only in-memory artifacts.  They are deliberately excluded from
+    # persisted workflow payloads, which must be JSON-safe.
     dataframe: pd.DataFrame
     prepared_dataframe: pd.DataFrame
 

@@ -3,7 +3,7 @@ from typing import Any
 
 import pytest
 
-from app.orchestration.nodes import output_nodes
+from app.services.analysis import pipelines
 
 
 def _state(execution_status: str) -> dict[str, Any]:
@@ -38,10 +38,10 @@ def test_llm_fallback_makes_an_otherwise_successful_workflow_partial(
         ],
     )
     monkeypatch.setattr(
-        output_nodes.DashboardResponse,
+        pipelines.DashboardResponse,
         "model_validate",
         lambda value: SimpleNamespace(dashboard=dashboard),
     )
 
-    assert output_nodes._workflow_status(_state("succeeded")) == "success"
-    assert output_nodes._workflow_status(_state("fallback")) == "partial"
+    assert pipelines._workflow_status(_state("succeeded")) == "success"
+    assert pipelines._workflow_status(_state("fallback")) == "partial"

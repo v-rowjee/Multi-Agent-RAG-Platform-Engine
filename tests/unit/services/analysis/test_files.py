@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import io
+
+import pandas as pd
+
 from app.services.analysis.files import DatasetFileService
 
 
@@ -28,3 +32,17 @@ def test_inspection_detects_the_time_field_and_date_range() -> None:
     assert inspection.time_field == "transaction_date"
     assert inspection.period_start == "2024-01-01T00:00:00"
     assert inspection.period_end == "2024-12-31T00:00:00"
+
+
+def test_xlsx_upload_metadata_and_dataframe_parsing_are_supported() -> None:
+    service = DatasetFileService()
+    output = io.BytesIO()
+    pd.DataFrame({"revenue": [10, 20]}).to_excel(output, index=False)
+
+    service.validate_upload_metadata(
+        "sales.xlsx",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    frame = service.read_dataframe("sales.xlsx", output.getvalue())
+
+    assert list(frame["revenue"]) == [10, 20]

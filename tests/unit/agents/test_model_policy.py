@@ -94,7 +94,9 @@ def test_forecasting_node_reports_actual_engine_outcome(
     model: str | None,
     expected_status: str,
 ) -> None:
-    async def fake_run(_: dict[str, object]) -> ForecastingOutput:
+    async def fake_run(
+        _: dict[str, object], __: object
+    ) -> ForecastingOutput:
         return ForecastingOutput(status="complete", model=model)
 
     monkeypatch.setattr(forecasting_module.forecasting_agent, "run", fake_run)
@@ -109,3 +111,26 @@ def test_forecasting_node_reports_actual_engine_outcome(
             "executionStatus": expected_status,
         }
     ]
+
+
+def test_forecasting_node_skips_when_the_orchestration_plan_excludes_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def should_not_run(
+        _: dict[str, object], __: object
+    ) -> ForecastingOutput:
+        raise AssertionError("Forecasting must not run when the plan excludes it.")
+
+    monkeypatch.setattr(forecasting_module.forecasting_agent, "run", should_not_run)
+
+    update = asyncio.run(
+        forecasting_module.forecasting_node(
+            {"orchestration_plan": {"selected_agents": ["kpi_trend", "anomaly_detection"]}}
+        )
+    )
+
+    assert update["forecasting_output"]["status"] == "skipped"
+    assert update["forecasting_output"]["historical"] == []
+    assert update["forecasting_output"]["forecast"] == []
+    assert update["completed_agents"] == ["forecasting"]
+    assert update["skipped_agents"] == ["forecasting"]

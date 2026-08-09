@@ -5,6 +5,7 @@ import math
 from typing import Any
 
 import numpy as np
+import numpy.typing as npt
 import pandas as pd
 
 from app.core.model_policy import forecasting_model_usage
@@ -137,7 +138,7 @@ def _fallback_forecast(
         model = "seasonal_naive"
     else:
         recent = values[-min(12, len(values)) :]
-        x = np.arange(len(recent), dtype=float)
+        x: npt.NDArray[np.float64] = np.arange(len(recent), dtype=float)
         slope, intercept = np.polyfit(x, recent, 1)
         predictions = [
             float(slope * (len(recent) - 1 + step) + intercept)
@@ -185,6 +186,7 @@ class ForecastingAgent:
             update={"horizon": _forecast_horizon(len(series))}
         )
         historical = [HistoricalPoint(period=str(period), value=round(float(value), 6)) for period, value in series.items()]
+        confidence_level: float | None
         try:
             response = await forecasting_service.forecast(series, definition.horizon)
         except Exception as exc:
@@ -213,6 +215,21 @@ forecasting_agent = ForecastingAgent()
 
 
 async def forecasting_node(state: dict[str, Any]) -> dict[str, Any]:
+    plan = state.get("orchestration_plan")
+    selected_agents = plan.get("selected_agents", []) if isinstance(plan, dict) else None
+    if isinstance(selected_agents, list) and "forecasting" not in selected_agents:
+        result = ForecastingOutput(
+            status="skipped",
+            limitations=[
+                "Forecasting was skipped because the dataset does not contain suitable time-series data."
+            ],
+        )
+        return {
+            "forecasting_output": result.model_dump(mode="json"),
+            "completed_agents": ["forecasting"],
+            "skipped_agents": ["forecasting"],
+        }
+
     try:
         result = await forecasting_agent.run(
             state.get("prepared_dataset", {}), state.get("prepared_dataframe")

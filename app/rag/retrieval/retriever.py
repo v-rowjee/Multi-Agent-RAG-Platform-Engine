@@ -651,10 +651,15 @@ class DeterministicAnalytics:
                 f"{label} {measure_label}{filter_text}: {self._format_value(measure, value)}.\n"
                 f"Source fields: {self._source_fields([*self._measure_source_fields(measure), *filters.keys()])}."
             )
+            reasoning = self._calculation_reasoning(
+                f"{self._filtered_frame_query(filters)}; "
+                f"{self._pandas_measure_expression('scoped', measure)}.{self._pandas_aggregation(operation)}()",
+                [*self._measure_source_fields(measure), *filters.keys()],
+                f"Applied {label.lower()} to {self._measure_grounding(measure)} in `{self.agent_input.fileName}`",
+            )
             direct = (
-                f"**Answer:** {label} `{measure_label}`{filter_text} is **{self._format_value(measure, value)}**.\n\n"
-                f"**Grounding:** Calculated from {self._measure_grounding(measure)}"
-                f"{self._fields_suffix(filters)} in dataset `{self.agent_input.fileName}`."
+                f"**Answer:** The {label.lower()} {measure_label}{filter_text} across matching records is **{self._format_value(measure, value)}**.\n\n"
+                f"**Grounding:** {reasoning}"
             )
             return CalculatedEvidence(text=text, direct_answer=direct)
 
@@ -694,11 +699,18 @@ class DeterministicAnalytics:
                 f"{item_label} {measure_label} by {dimension}{filter_text}: {values}.\n"
                 f"Source fields: {self._source_fields([*self._measure_source_fields(measure), dimension, *filters.keys()])}."
             )
+            reasoning = self._calculation_reasoning(
+                f"{self._filtered_frame_query(filters)}; grouped = "
+                f"pd.DataFrame({{{dimension!r}: scoped[{dimension!r}], {measure_label!r}: "
+                f"{self._pandas_measure_expression('scoped', measure)}}}).dropna()"
+                f".groupby({dimension!r})[{measure_label!r}].sum()"
+                f".sort_values(ascending={operation == 'bottom'}).head({10 if operation == 'group_by' else 1})",
+                [*self._measure_source_fields(measure), dimension, *filters.keys()],
+                f"Grouped {self._measure_grounding(measure)} by `{dimension}` in `{self.agent_input.fileName}`",
+            )
             direct = (
-                f"**Answer:** {item_label} `{measure_label}` by `{dimension}`{filter_text}: "
-                f"**{values}**.\n\n"
-                f"**Grounding:** Calculated from {self._measure_grounding(measure)} grouped by `{dimension}`"
-                f"{self._fields_suffix(filters)} in dataset `{self.agent_input.fileName}`."
+                f"**Answer:** The {item_label.lower()} {measure_label} by {dimension}{filter_text} is **{values}**.\n\n"
+                f"**Grounding:** {reasoning}"
             )
             return CalculatedEvidence(text=text, direct_answer=direct)
 
@@ -716,10 +728,14 @@ class DeterministicAnalytics:
             f"Count of rows{filter_text}: {value:,}.\n"
             f"Source fields: {self._source_fields(list(filters.keys())) if filters else 'row count'}."
         )
+        reasoning = self._calculation_reasoning(
+            f"{self._filtered_frame_query(filters)}; len(scoped)",
+            list(filters.keys()),
+            f"Counted rows after applying the requested filters in `{self.agent_input.fileName}`",
+        )
         direct = (
-            f"**Answer:** The row count{filter_text} is **{value:,}**.\n\n"
-            f"**Grounding:** Calculated from dataset `{self.agent_input.fileName}`"
-            f"{self._fields_suffix(filters)}."
+            f"**Answer:** There are **{value:,}** records{filter_text} in the uploaded dataset.\n\n"
+            f"**Grounding:** {reasoning}"
         )
         return CalculatedEvidence(text=text, direct_answer=direct)
 
@@ -770,13 +786,54 @@ class DeterministicAnalytics:
             f"Method: linear trend on annual totals from {min(years)} to {last_year}.\n"
             f"Source fields: {source_fields}."
         )
+        reasoning = self._calculation_reasoning(
+            f"scoped = {self._filtered_frame_query(filters).removeprefix('scoped = ')}; "
+            f"annual = pd.DataFrame({{'period': scoped[{time_column!r}], 'value': "
+            f"{self._pandas_measure_expression('scoped', measure)}}}).dropna()"
+            ".groupby('period')['value'].sum(); "
+            "np.polyfit(range(len(annual)), annual, 1)",
+            [time_column, *self._measure_source_fields(measure), *filters.keys()],
+            f"Fitted a linear trend to annual {self._measure_grounding(measure)} using `{time_column}` from {min(years)} to {last_year}",
+        )
         direct = (
-            f"**Answer:** The forecasted total `{measure_label}`{filter_text} {target_text} "
-            f"is **{value_text}**, using a linear trend on annual totals.\n\n"
-            f"**Grounding:** Calculated from {self._measure_grounding(measure)} using "
-            f"`{time_column}` from {min(years)} to {last_year}."
+            f"**Answer:** The forecasted {measure_label}{filter_text} {target_text} is **{value_text}**, based on the annual trend.\n\n"
+            f"**Grounding:** {reasoning}"
         )
         return CalculatedEvidence(text=text, direct_answer=direct)
+
+    def _filtered_frame_query(self, filters: dict[str, str | int]) -> str:
+        if not filters:
+            return "scoped = df"
+        conditions = " & ".join(
+            f"df[{column!r}].eq({value!r})" for column, value in filters.items()
+        )
+        return f"scoped = df[{conditions}]"
+
+    def _pandas_measure_expression(self, frame_name: str, measure: str) -> str:
+        if measure == DERIVED_REVENUE_COLUMN and self._revenue_source_columns:
+            price_column, quantity_column = self._revenue_source_columns
+            return (
+                f"pd.to_numeric({frame_name}[{price_column!r}], errors='coerce') * "
+                f"pd.to_numeric({frame_name}[{quantity_column!r}], errors='coerce')"
+            )
+        return f"pd.to_numeric({frame_name}[{measure!r}], errors='coerce')"
+
+    @staticmethod
+    def _pandas_aggregation(operation: str) -> str:
+        return {"average": "mean"}.get(operation, operation)
+
+    @staticmethod
+    def _calculation_reasoning(
+        pandas_query: str,
+        columns: list[str],
+        rationale: str,
+    ) -> str:
+        used_columns = ", ".join(f"`{column}`" for column in dict.fromkeys(columns))
+        return (
+            f"**Pandas query:** `{pandas_query}`\n"
+            f"**Why:** {rationale}.\n"
+            f"**Columns used:** {used_columns or 'dataset rows'}."
+        )
 
     def _operation(self, lowered: str) -> str | None:
         if any(word in lowered for word in ("how many", "count", "number of rows", "row count")):

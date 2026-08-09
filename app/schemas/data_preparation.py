@@ -25,7 +25,11 @@ class MissingValueSummary(StrictModel):
 
 
 class GenericCleaningResult(StrictModel):
-    cleaned_file_path: str
+    # Retained for path-based legacy adapters only.  The DataFrame-first
+    # workflow does not create a cleaned CSV file.
+    cleaned_file_path: str = ""
+    # Object storage location for the cleaned Parquet representation.
+    cleaned_storage_path: str | None = None
     original_row_count: int = Field(ge=0)
     cleaned_row_count: int = Field(ge=0)
     original_column_count: int = Field(ge=0)
@@ -231,6 +235,8 @@ class PreparationReport(StrictModel):
 
 
 class PreparedDatasetPackage(StrictModel):
+    # Deprecated compatibility fields for callers that still load prepared
+    # CSV files.  The graph passes ``prepared_dataframe`` in memory.
     prepared_file_path: str | None = None
     file_name: str
     temporal_dataset_path: str | None = None

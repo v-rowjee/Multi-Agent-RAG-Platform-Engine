@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from dataclasses import replace
+from collections.abc import Mapping
 from typing import Any
 
 import pandas as pd
@@ -19,6 +20,54 @@ from app.services.persistence.analysis import AnalysisSessionRecord, DatasetReco
 from app.services.persistence.supabase import SupabaseGateway
 
 logger = logging.getLogger(__name__)
+
+
+def _workflow_status(state: Mapping[str, Any]) -> str:
+    """Classify the completed multi-agent workflow state."""
+    if "data_preparation" in set(state.get("failed_agents", [])):
+        return "failed"
+    try:
+        response = DashboardResponse.model_validate(state.get("dashboard_output"))
+    except Exception:
+        return "failed"
+    if response.dashboard is None:
+        return "failed"
+
+    dashboard = response.dashboard
+    selected = set(
+        (state.get("orchestration_plan") or {}).get("selected_agents", [])
+    )
+    failed = set(state.get("failed_agents", []))
+    completed = set(state.get("completed_agents", []))
+    used_llm_fallback = any(
+        invocation.get("executionStatus") == "fallback"
+        for invocation in state.get("model_invocations", [])
+    )
+    chart_types = [chart.type for chart in dashboard.supportingCharts]
+    meets_success_shape = (
+        4 <= len(dashboard.kpis) <= 8
+        and 2 <= len(dashboard.supportingCharts) <= 4
+        and len(chart_types) == len(set(chart_types))
+    )
+    optional_failure = bool(
+        ({"anomaly_detection", "forecasting"} & selected & failed)
+        or "kpi_trend" in failed
+        or "insight_synthesis" in failed
+        or "retrieval_preparation" in failed
+        or (
+            "forecasting" in selected
+            and not (state.get("forecasting_output") or {}).get("forecast")
+        )
+    )
+    if (
+        meets_success_shape
+        and selected <= completed
+        and {"dashboard_generation", "retrieval_preparation"} <= completed
+        and not optional_failure
+        and not used_llm_fallback
+    ):
+        return "success"
+    return "partial"
 
 
 class AnalysisPipelineRunner:
@@ -45,8 +94,35 @@ class AnalysisPipelineRunner:
         datasets: list[DatasetRecord],
         contents: list[bytes],
     ) -> tuple[DatasetRecord, bytes]:
+        """Return a compatibility payload for callers that still need bytes.
+
+        New multi-agent callers should use ``workspace_analysis_input_with_dataframe``
+        and keep the combined frame in memory.  Parquet keeps this compatibility
+        payload faithful to pandas dtypes instead of round-tripping through CSV.
+        """
+        dataset, content, _ = self.workspace_analysis_input_with_dataframe(
+            session,
+            datasets,
+            contents,
+        )
+        return dataset, content
+
+    def workspace_analysis_input_with_dataframe(
+        self,
+        session: AnalysisSessionRecord,
+        datasets: list[DatasetRecord],
+        contents: list[bytes],
+    ) -> tuple[DatasetRecord, bytes, pd.DataFrame]:
+        """Build a workspace input once and retain its in-memory DataFrame."""
         if len(datasets) == 1:
-            return datasets[0], contents[0]
+            return (
+                datasets[0],
+                contents[0],
+                self.files.read_workspace_dataframe(
+                    datasets[0].storage_path,
+                    contents[0],
+                ),
+            )
         frames = [
             self.files.read_workspace_dataframe(dataset.storage_path, content)
             for dataset, content in zip(datasets, contents, strict=True)
@@ -58,7 +134,7 @@ class AnalysisPipelineRunner:
         for dataset, frame in zip(datasets, frames, strict=True):
             frame[source_column] = dataset.file_name
         combined = pd.concat(frames, ignore_index=True, sort=False)
-        content = combined.to_csv(index=False).encode("utf-8")
+        content = self.files.dataframe_to_parquet(combined)
         return (
             replace(
                 datasets[0],
@@ -72,6 +148,7 @@ class AnalysisPipelineRunner:
                 ),
             ),
             content,
+            combined,
         )
 
     async def run_single_agent(
@@ -120,6 +197,7 @@ class AnalysisPipelineRunner:
         workspace_datasets: list[DatasetRecord] | None = None,
         *,
         graph: Any | None = None,
+        dataframe: pd.DataFrame | None = None,
     ) -> PipelineExecution:
         session_id = workspace_session_id or dataset.session_id or dataset.id
         content = (
@@ -127,7 +205,10 @@ class AnalysisPipelineRunner:
             if content is not None
             else self.storage.download_file(dataset.storage_path)
         )
-        dataframe = self.files.read_workspace_dataframe(dataset.storage_path, content)
+        if dataframe is None:
+            dataframe = self.files.read_workspace_dataframe(dataset.storage_path, content)
+        elif not isinstance(dataframe, pd.DataFrame):
+            raise TypeError("dataframe must be a pandas DataFrame when provided.")
         initial_state = {
             "session_id": session_id,
             "dataset_id": dataset.id,
@@ -159,7 +240,8 @@ class AnalysisPipelineRunner:
                 raise ValueError("The workflow did not return a dashboard output.")
             dashboard_output = dict(dashboard_output)
             dashboard_output["sessionId"] = session_id
-            status = str(result.get("workflow_status") or "failed")
+            status = _workflow_status(result)
+            result["workflow_status"] = status
             if status == "failed":
                 raise RuntimeError("The multi-agent workflow failed.")
             dashboard_output["status"] = status

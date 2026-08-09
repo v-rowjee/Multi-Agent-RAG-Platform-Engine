@@ -174,7 +174,7 @@ class ForecastPoint(StrictModel):
     upper_bound: float | None = None
 
 class ForecastingOutput(StrictModel):
-    status: Literal["complete", "partial"] = "partial"
+    status: Literal["complete", "partial", "skipped"] = "partial"
     series_id: str | None = None
     title: str | None = None
     measure: str | None = None
@@ -238,5 +238,6 @@ class GroundedChatDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     answer: str = Field(min_length=1)
+    reasoning: str = Field(default="", max_length=900)
     source_ids: list[str] = Field(default_factory=list)
     insufficient_context: bool

@@ -376,12 +376,14 @@ class BusinessIntelligenceService:
     ) -> DashboardResponse:
         if len(datasets) != len(contents) or not datasets:
             raise ValueError("Every workspace dataset requires source content.")
-        workspace_dataset, workspace_content = (
-            self._pipeline_runner.workspace_analysis_input(
-                session,
-                datasets,
-                contents,
-            )
+        (
+            workspace_dataset,
+            workspace_content,
+            workspace_dataframe,
+        ) = self._pipeline_runner.workspace_analysis_input_with_dataframe(
+            session,
+            datasets,
+            contents,
         )
         if self.settings.bi_pipeline_mode == "multi":
             execution = await self._call_multi_pipeline_compatibly(
@@ -389,6 +391,7 @@ class BusinessIntelligenceService:
                 workspace_content,
                 session.id,
                 datasets,
+                workspace_dataframe,
             )
         else:
             execution = await self._run_single_agent_pipeline(
@@ -417,6 +420,7 @@ class BusinessIntelligenceService:
         content: bytes,
         session_id: str,
         datasets: list[DatasetRecord],
+        dataframe: Any,
     ) -> PipelineExecution | DashboardResponse:
         # Existing extensions and tests replace this seam with older call
         # signatures. Signature filtering avoids using TypeError as control flow.
@@ -427,6 +431,8 @@ class BusinessIntelligenceService:
             kwargs["workspace_session_id"] = session_id
         if "workspace_datasets" in parameters:
             kwargs["workspace_datasets"] = datasets
+        if "dataframe" in parameters:
+            kwargs["dataframe"] = dataframe
         return await runner(dataset, content, **kwargs)
 
     async def _run_single_agent_pipeline(
@@ -442,6 +448,7 @@ class BusinessIntelligenceService:
         content: bytes | None = None,
         workspace_session_id: str | None = None,
         workspace_datasets: list[DatasetRecord] | None = None,
+        dataframe: Any | None = None,
     ) -> PipelineExecution:
         return await self._pipeline_runner.run_multi_agent(
             dataset,
@@ -449,6 +456,7 @@ class BusinessIntelligenceService:
             workspace_session_id,
             workspace_datasets,
             graph=analysis_graph,
+            dataframe=dataframe,
         )
 
     # Narrow compatibility delegates retained for callers identified before the

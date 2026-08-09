@@ -113,9 +113,12 @@ class BusinessIntelligenceChatService:
             retrieval_query,
             history=history,
         )
+        response_text = result.draft.answer
+        if result.draft.reasoning.strip():
+            response_text += f"\n\n**Grounding:** {result.draft.reasoning.strip()}"
         return self.save_chat_response(
             session_id,
-            result.draft.answer,
+            response_text,
             result.draft.source_ids,
         )
 

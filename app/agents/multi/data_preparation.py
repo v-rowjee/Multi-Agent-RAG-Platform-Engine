@@ -122,7 +122,8 @@ class DataPreparationAgent:
             cleaning_report.original_column_count,
             cleaning_report.cleaned_row_count,
             cleaning_report.cleaned_column_count,
-            cleaning_report.cleaned_file_path,
+            cleaning_report.cleaned_storage_path
+            or cleaning_report.cleaned_file_path,
         )
 
         profile = _profile_dataset(df, business_description)

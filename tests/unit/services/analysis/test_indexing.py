@@ -11,6 +11,7 @@ def test_persistence_sanitizers_remove_temporary_paths_recursively() -> None:
             "dataset_profile": {"row_count": 3},
             "cleaning_report": {
                 "cleaned_file_path": "cleaned.csv",
+                "cleaned_storage_path": "cleaned.parquet",
                 "removed_rows": 1,
             },
         }
