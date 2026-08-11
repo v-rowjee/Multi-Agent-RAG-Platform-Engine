@@ -142,6 +142,22 @@ def _get_float(
     return val
 
 
+def get_cors_allowed_origins() -> tuple[str, ...]:
+    """Read the comma-separated browser origins from the environment."""
+
+    origins = tuple(
+        origin.strip()
+        for origin in os.environ.get(
+            "CORS_ALLOWED_ORIGINS",
+            "http://localhost:5173,https://marsapp.vercel.app",
+        ).split(",")
+        if origin.strip()
+    )
+    if not origins:
+        raise RuntimeConfigurationError("CORS_ALLOWED_ORIGINS must not be empty")
+    return origins
+
+
 def _get_agent_policy(name: str, data: dict[str, Any]) -> AgentModelPolicy:
     provider = _get_str(data, "provider").lower()
     if provider not in {"groq", "openrouter"}:

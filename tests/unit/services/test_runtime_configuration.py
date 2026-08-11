@@ -8,7 +8,7 @@ import toons
 import app.core.prompt_loader as prompt_module
 from app.core.config import (AGENT_PROFILES_DIR, CONFIG_PATH, RAG_CONFIG_PATH,
                              RuntimeConfigurationError, get_runtime_config,
-                             get_settings, load_rag_config,
+                             get_cors_allowed_origins, get_settings, load_rag_config,
                              load_runtime_config)
 from app.core.prompt_loader import (PROMPTS_ROOT, PromptTemplateError,
                                     render_agent_prompts,
@@ -121,6 +121,29 @@ def test_invalid_pipeline_mode_is_rejected(tmp_path: Path) -> None:
 
     with pytest.raises(RuntimeConfigurationError, match="runtime.pipeline_mode"):
         load_runtime_config(config_path)
+
+
+def test_cors_allowed_origins_are_read_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "CORS_ALLOWED_ORIGINS",
+        "http://localhost:5173,https://app.example.com",
+    )
+
+    assert get_cors_allowed_origins() == (
+        "http://localhost:5173",
+        "https://app.example.com",
+    )
+
+
+def test_cors_allowed_origins_default_includes_production_frontend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("CORS_ALLOWED_ORIGINS", raising=False)
+
+    assert get_cors_allowed_origins() == (
+        "http://localhost:5173",
+        "https://marsapp.vercel.app",
+    )
 
 
 def test_invalid_agent_provider_and_model_are_rejected(tmp_path: Path) -> None:

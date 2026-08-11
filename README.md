@@ -72,6 +72,13 @@ policies. Each LLM agent has one versioned
 TOON bundle in `app/prompts/`; the backend validates the bundle at startup and
 serializes its structured system and user context as TOON before invocation.
 Mode and model settings are deliberately not read from `.env`.
+The permitted browser origins are read from `.env` at startup:
+
+```dotenv
+CORS_ALLOWED_ORIGINS=http://localhost:5173,https://marsapp.vercel.app
+```
+
+Restart the backend after changing this setting.
 The multi-agent chat response has a 15-second generation limit. If it expires,
 the API returns already-retrieved recommendation evidence when available.
 Forecasting always uses the fixed Chronos-2 engine (`amazon/chronos-2`).
