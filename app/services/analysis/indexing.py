@@ -6,7 +6,6 @@ import logging
 from typing import Any
 
 from app.agents.multi.retrieval_preparation import dashboard_retrieval_documents
-from app.agents.single import business_intelligence as single_agent_module
 from app.core.config import Settings
 from app.schemas.api import ApiMessage, DashboardResponse
 from app.services.analysis.dashboards import DashboardAssembler
@@ -19,6 +18,13 @@ from app.services.persistence.analysis import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _single_agent() -> Any:
+    """Load the single-agent stack only when indexing its retrieval documents."""
+    from app.agents.single.business_intelligence import business_intelligence_agent
+
+    return business_intelligence_agent
 
 
 class AnalysisExecutionPersistenceService:
@@ -319,7 +325,7 @@ class AnalysisExecutionPersistenceService:
                 with self.files.temporary_agent_input(dataset, content) as agent_input:
                     agent = (
                         self.single_agent
-                        or single_agent_module.business_intelligence_agent
+                        or _single_agent()
                     )
                     profile = agent.profile_for_session(agent_input)
                     documents.extend(
@@ -342,7 +348,7 @@ class AnalysisExecutionPersistenceService:
             with self.files.temporary_agent_input(dataset, content) as agent_input:
                 agent = (
                     self.single_agent
-                    or single_agent_module.business_intelligence_agent
+                    or _single_agent()
                 )
                 profile = agent.profile_for_session(agent_input)
                 self.indexing.index_dataset(

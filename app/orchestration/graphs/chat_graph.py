@@ -5,19 +5,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import threading
 from dataclasses import dataclass
 from typing import Any
 
-from langgraph.graph import END, START, StateGraph
-
-from app.agents.multi.chat import (
-    INSUFFICIENT_CONTEXT_ANSWER,
-    chat_agent,
-)
 from app.core.config import agent_model_policy, get_rag_config
-from app.orchestration.state import ChatState
-from app.rag.models import RetrievedDocument
-from app.rag.retrieval.retriever import retriever
 from app.schemas.specialists import GroundedChatDraft
 
 
@@ -28,6 +20,10 @@ _CHAT_SEARCH_LIMIT = _RAG_CONFIG.retrieval.chat_search_limit
 _CHAT_AGENT_TIMEOUT_SECONDS = agent_model_policy("chat").timeout_seconds
 _MAX_HISTORY_MESSAGES = 6
 _MAX_HISTORY_CHARACTERS = 2_000
+INSUFFICIENT_CONTEXT_ANSWER = (
+    "The available analysis does not contain enough information to answer that "
+    "question."
+)
 
 BLOCKED_CHAT_ANSWER = (
     "I cannot follow requests to reveal secrets or override the analysis "
@@ -218,11 +214,16 @@ def _timeout_fallback(documents: list[RetrievedDocument]) -> GroundedChatDraft:
 
 def build_chat_graph(rag: Any | None = None, agent: Any | None = None):
     """Compile the guarded retrieval, generation, and grounding workflow."""
+    from langgraph.graph import END, START, StateGraph
+
+    from app.agents.multi.chat import chat_agent
+    from app.orchestration.state import ChatState
+    from app.rag.retrieval.retriever import retriever
 
     retrieval = rag or retriever
     chat = agent or chat_agent
 
-    def guardrail(state: ChatState) -> dict[str, Any]:
+    def guardrail(state: dict[str, Any]) -> dict[str, Any]:
         query = str(state.get("query") or "").strip()
         if not query:
             raise ValueError("The chat query cannot be empty.")
@@ -240,10 +241,10 @@ def build_chat_graph(rag: Any | None = None, agent: Any | None = None):
             )
         return update
 
-    def route_guardrail(state: ChatState) -> str:
+    def route_guardrail(state: dict[str, Any]) -> str:
         return "blocked" if state.get("blocked") else "retrieve"
 
-    def retrieve_node(state: ChatState) -> dict[str, Any]:
+    def retrieve_node(state: dict[str, Any]) -> dict[str, Any]:
         contextual_query = _retrieval_query(state["query"], state.get("history") or [])
         candidates = retrieval.retrieve(
             session_id=state["session_id"],
@@ -255,14 +256,14 @@ def build_chat_graph(rag: Any | None = None, agent: Any | None = None):
             "retrieved_documents": candidates,
         }
 
-    def rerank_node(state: ChatState) -> dict[str, Any]:
+    def rerank_node(state: dict[str, Any]) -> dict[str, Any]:
         candidates = state.get("retrieved_documents") or []
         reranked = retrieval.rerank(state["retrieval_query"], candidates)
         return {
             "reranked_documents": (reranked or candidates)[:_CHAT_SEARCH_LIMIT],
         }
 
-    def generation_node(state: ChatState) -> dict[str, Any]:
+    def generation_node(state: dict[str, Any]) -> dict[str, Any]:
         documents = state.get("reranked_documents") or []
         try:
             draft = asyncio.run(
@@ -292,7 +293,7 @@ def build_chat_graph(rag: Any | None = None, agent: Any | None = None):
             )
         return {"draft": draft}
 
-    def grounding_node(state: ChatState) -> dict[str, Any]:
+    def grounding_node(state: dict[str, Any]) -> dict[str, Any]:
         try:
             draft = _ground_draft(
                 state["query"],
@@ -331,7 +332,17 @@ def build_chat_graph(rag: Any | None = None, agent: Any | None = None):
 
 class ChatGraph:
     def __init__(self, rag: Any | None = None, agent: Any | None = None) -> None:
-        self._graph = build_chat_graph(rag, agent)
+        self._rag = rag
+        self._agent = agent
+        self._graph: Any | None = None
+        self._graph_lock = threading.Lock()
+
+    def _graph_instance(self) -> Any:
+        if self._graph is None:
+            with self._graph_lock:
+                if self._graph is None:
+                    self._graph = build_chat_graph(self._rag, self._agent)
+        return self._graph
 
     def answer(
         self,
@@ -339,7 +350,7 @@ class ChatGraph:
         query: str,
         history: list[dict[str, str]] | None = None,
     ) -> ChatResult:
-        result = self._graph.invoke(
+        result = self._graph_instance().invoke(
             {"session_id": session_id, "query": query, "history": history or []}
         )
         return ChatResult(query=result["query"], draft=result["draft"])

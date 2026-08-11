@@ -7,7 +7,10 @@ from typing import Literal, TypedDict
 from typing_extensions import NotRequired
 
 from app.core.config import get_runtime_config
-from app.services.forecasting.chronos import CHRONOS_MODEL_ID
+
+# Keep model metadata import-only. Importing the forecasting service would also
+# import pandas/numpy even when a process only needs to serve the health route.
+CHRONOS_MODEL_ID = "amazon/chronos-2"
 
 
 class ModelUsage(TypedDict):

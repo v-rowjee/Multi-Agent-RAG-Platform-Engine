@@ -16,7 +16,7 @@ from app.core.exceptions import (
     InvalidUploadError,
     SessionNotFoundError,
 )
-from app.orchestration.graphs.analysis_graph import analysis_graph
+from app.orchestration.graphs.analysis_graph import get_analysis_graph
 from app.orchestration.graphs.chat_graph import ChatGraph
 from app.rag.indexing.indexing_service import IndexingService, indexing_service
 from app.rag.retrieval.retriever import retriever
@@ -42,6 +42,14 @@ from app.services.persistence.supabase import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Retain this patch point for existing integrations/tests while avoiding graph
+# compilation as a side effect of importing the API service.
+analysis_graph: Any | None = None
+
+
+def _multi_agent_graph() -> Any:
+    return analysis_graph or get_analysis_graph()
 
 
 class BusinessIntelligenceService:
@@ -126,7 +134,7 @@ class BusinessIntelligenceService:
             files=self._file_service,
             dashboards=self._dashboard_assembler,
             storage=self.storage,
-            graph=analysis_graph,
+            graph=None,
         )
         self._execution_persistence = (
             execution_persistence
@@ -455,7 +463,7 @@ class BusinessIntelligenceService:
             content,
             workspace_session_id,
             workspace_datasets,
-            graph=analysis_graph,
+            graph=_multi_agent_graph(),
             dataframe=dataframe,
         )
 

@@ -445,10 +445,28 @@ def get_settings() -> Settings:
 
 def init_app() -> None:
     """Validate application configuration before startup."""
-    from app.core.llm import validate_active_provider_credentials
     from app.core.prompt_loader import validate_prompt_bundles
 
-    get_runtime_config()
+    runtime = get_runtime_config()
     get_rag_config()
     validate_prompt_bundles()
-    validate_active_provider_credentials()
+    active_agents = (
+        ("single_dashboard", "single_chat")
+        if runtime.pipeline_mode == "single"
+        else (
+            "data_preparation",
+            "orchestrator",
+            "kpi_trend",
+            "anomaly_detection",
+            "insight_synthesis",
+            "dashboard_generation",
+            "chat",
+        )
+    )
+    credential_names = {"groq": "GROQ_API_KEY", "openrouter": "OPENROUTER_API_KEY"}
+    for provider in {runtime.agents[name].provider for name in active_agents}:
+        credential_name = credential_names[provider]
+        if not os.environ.get(credential_name, "").strip():
+            raise RuntimeConfigurationError(
+                f"{credential_name} is required when provider = {provider!r}."
+            )

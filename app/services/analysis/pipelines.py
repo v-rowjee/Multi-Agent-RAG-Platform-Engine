@@ -10,8 +10,6 @@ from time import perf_counter
 from typing import Any
 
 import pandas as pd
-
-from app.agents.single import business_intelligence as single_agent_module
 from app.core.config import Settings
 from app.schemas.api import ApiMessage, DashboardResponse
 from app.services.analysis.dashboards import DashboardAssembler
@@ -178,7 +176,7 @@ class AnalysisPipelineRunner:
             try:
                 agent = (
                     self.single_agent
-                    or single_agent_module.business_intelligence_agent
+                    or _single_agent()
                 )
                 return agent.generate_dashboard(agent_input)
             except Exception:
@@ -322,3 +320,10 @@ class AnalysisPipelineRunner:
             },
             retrieval_documents=[],
         )
+
+
+def _single_agent() -> Any:
+    """Defer the single-agent/LangChain import until that pipeline is selected."""
+    from app.agents.single.business_intelligence import business_intelligence_agent
+
+    return business_intelligence_agent

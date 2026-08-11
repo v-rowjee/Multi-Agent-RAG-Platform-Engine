@@ -71,7 +71,14 @@ class BusinessIntelligenceAgent:
         self._profiles: dict[str, dict[str, Any]] = {}
         self._history: dict[str, list[dict[str, str]]] = {}
         self._last_source_ids: dict[str, list[str]] = {}
-        self.graph = self._build_graph()
+        self._graph: Any | None = None
+
+    @property
+    def graph(self) -> Any:
+        """Compile the single-agent workflow only when it is first used."""
+        if self._graph is None:
+            self._graph = self._build_graph()
+        return self._graph
 
     def run(self, agent_input: BusinessIntelligenceAgentInput) -> DashboardResponse:
         return self.graph.invoke({"mode": "dashboard", "agent_input": agent_input})[

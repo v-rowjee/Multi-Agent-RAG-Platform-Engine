@@ -1,14 +1,24 @@
 """Stable public facade for business-intelligence API callers."""
 
+from typing import Any
+
 from app.core.exceptions import (
     DatasetAlreadyExistsError,
     InvalidUploadError,
     SessionNotFoundError,
 )
-from app.orchestration.graphs.analysis_graph import analysis_graph
+from app.orchestration.graphs.analysis_graph import get_analysis_graph
 from app.services.analysis.facade import BusinessIntelligenceService as _Facade
 from app.services.analysis.models import PipelineExecution
 from app.services.persistence.analysis import DatasetRecord
+
+
+# Retain the established patch point without compiling the graph at import time.
+analysis_graph: Any | None = None
+
+
+def _multi_agent_graph() -> Any:
+    return analysis_graph or get_analysis_graph()
 
 
 class BusinessIntelligenceService(_Facade):
@@ -28,7 +38,7 @@ class BusinessIntelligenceService(_Facade):
             content,
             workspace_session_id,
             workspace_datasets,
-            graph=analysis_graph,
+            graph=_multi_agent_graph(),
         )
 
 

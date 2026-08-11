@@ -1,4 +1,8 @@
-"""Best-effort startup warm-up for local inference models."""
+"""Optional best-effort warm-up for local inference models.
+
+Web processes must not call this during ASGI startup: model residency is too
+large for small service instances. It is retained for explicit worker/CLI use.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 
 async def warm_local_models() -> None:
-    """Warm local models sequentially; an unavailable model never blocks startup."""
+    """Warm local models sequentially when explicitly requested."""
     models: tuple[tuple[str, Callable[[], None]], ...] = (
         ("chronos", chronos_service.warm),
         ("embedding", get_embedding_service().warm),

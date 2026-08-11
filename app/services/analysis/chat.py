@@ -9,8 +9,6 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-
-from app.agents.single import business_intelligence as single_agent_module
 from app.core.config import Settings
 from app.core.exceptions import SessionNotFoundError
 from app.core.model_policy import chat_model_usage
@@ -281,7 +279,7 @@ class BusinessIntelligenceChatService:
             with self.files.temporary_agent_input(dataset, content) as agent_input:
                 agent = (
                     self.single_agent
-                    or single_agent_module.business_intelligence_agent
+                    or _single_agent()
                 )
                 response = agent.chat(
                     agent_input=agent_input,
@@ -399,3 +397,10 @@ class BusinessIntelligenceChatService:
 
     def chat_model_metadata(self) -> dict[str, str]:
         return chat_model_usage(self.settings.bi_pipeline_mode)
+
+
+def _single_agent() -> Any:
+    """Load the single-agent stack only for a single-agent chat request."""
+    from app.agents.single.business_intelligence import business_intelligence_agent
+
+    return business_intelligence_agent
