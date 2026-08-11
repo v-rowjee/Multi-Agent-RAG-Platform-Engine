@@ -63,6 +63,11 @@ class MessageRepository:
             rows = list(response.data or [])
             return [self._message(row) for row in reversed(rows)]
 
+    def delete_session_messages(self, session_id: str) -> None:
+            self.client.table("messages").delete().eq(
+                "session_id", session_id
+            ).execute()
+
     @staticmethod
     def _message(row: JsonDict) -> MessageRecord:
             sources = row.get("sources")

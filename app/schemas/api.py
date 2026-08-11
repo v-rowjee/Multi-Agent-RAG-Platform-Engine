@@ -99,9 +99,15 @@ class DatasetPreviewResponse(BaseModel):
     total_rows: int = Field(ge=0)
     total_pages: int = Field(ge=0)
 
+
+class DatasetPreviewRequest(BaseModel):
+    datasetId: str | None = Field(default=None, min_length=1)
+    page: int = Field(default=1, ge=1)
+    pageSize: int = Field(default=50, ge=1, le=50)
+
+
 class ChatRequest(BaseModel):
-    sessionId: str = Field(min_length=1)
-    query: str = Field(min_length=1)
+    message: str = Field(min_length=1)
 
 class ChatResponse(BaseModel):
     answer: str = Field(min_length=1)

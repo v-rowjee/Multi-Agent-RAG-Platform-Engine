@@ -6,7 +6,6 @@ from fastapi import (
     File,
     Form,
     HTTPException,
-    Query,
     UploadFile,
 )
 from app.api.auth import AuthenticatedUser
@@ -15,7 +14,7 @@ from app.core.exceptions import (
     InvalidUploadError,
     SessionNotFoundError,
 )
-from app.schemas.api import DatasetPreviewResponse, UploadCandidate
+from app.schemas.api import DatasetPreviewRequest, DatasetPreviewResponse, UploadCandidate
 from app.services.business_intelligence import (
     business_intelligence_service,
 )
@@ -45,7 +44,7 @@ async def upload_file(
         uploaded_files = list(files or [])
         if file is not None:
             uploaded_files.append(file)
-        return await business_intelligence_service.create_analysis(
+        return await business_intelligence_service.upload_files(
             files=[await _upload_candidate(item) for item in uploaded_files],
             description=description,
             user_id=current_user.id,
@@ -53,7 +52,7 @@ async def upload_file(
             background_tasks=background_tasks,
         )
 
-    except InvalidUploadError as error:
+    except (InvalidUploadError, ValueError) as error:
         raise HTTPException(
             status_code=400,
             detail=str(error),
@@ -73,7 +72,7 @@ async def upload_file(
         ) from error
 
 
-@router.get("/dataset")
+@router.get("/datasets")
 def get_active_dataset(
     current_user: AuthenticatedUser,
 ) -> dict[str, Any]:
@@ -92,31 +91,7 @@ def get_active_dataset(
         ) from error
 
 
-@router.post("/dataset")
-async def add_datasets(
-    background_tasks: BackgroundTasks,
-    current_user: AuthenticatedUser,
-    files: list[UploadFile] = File(...),
-) -> dict[str, Any]:
-    try:
-        return await business_intelligence_service.add_datasets(
-            files=[await _upload_candidate(item) for item in files],
-            user_id=current_user.id,
-            background_tasks=background_tasks,
-        )
-    except SessionNotFoundError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
-    except InvalidUploadError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
-    except Exception as error:
-        print(f"Unexpected error while adding datasets: {error}")
-        raise HTTPException(
-            status_code=500,
-            detail="An unexpected error occurred while adding the datasets.",
-        ) from error
-
-
-@router.delete("/dataset/{dataset_id}", status_code=204)
+@router.delete("/datasets/{dataset_id}", status_code=204)
 async def remove_dataset(
     dataset_id: str,
     background_tasks: BackgroundTasks,
@@ -140,20 +115,18 @@ async def remove_dataset(
         ) from error
 
 
-@router.get("/dataset/preview", response_model=DatasetPreviewResponse)
+@router.post("/datasets/preview", response_model=DatasetPreviewResponse)
 def get_dataset_preview(
+    request: DatasetPreviewRequest,
     current_user: AuthenticatedUser,
-    dataset_id: str | None = Query(default=None, min_length=1),
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=50, ge=1, le=50),
 ) -> DatasetPreviewResponse:
     try:
         return DatasetPreviewResponse(
             **business_intelligence_service.get_dataset_preview(
                 current_user.id,
-                dataset_id,
-                page,
-                page_size,
+                request.datasetId,
+                request.page,
+                request.pageSize,
             )
         )
     except SessionNotFoundError as error:
@@ -167,7 +140,7 @@ def get_dataset_preview(
         ) from error
 
 
-@router.post("/dataset/reset", status_code=204)
+@router.post("/workspace/reset", status_code=204)
 def reset_dataset(
     current_user: AuthenticatedUser,
 ) -> None:
@@ -182,23 +155,23 @@ def reset_dataset(
         ) from error
 
 
-@router.get("/dashboard/{session_id}")
+@router.get("/dashboard")
 async def get_dashboard(
-    session_id: str,
     background_tasks: BackgroundTasks,
     current_user: AuthenticatedUser,
 ) -> dict[str, Any]:
     try:
         payload = (
-            await business_intelligence_service.get_dashboard(
-                session_id,
+            await business_intelligence_service.get_active_dashboard(
                 current_user.id,
                 background_tasks=background_tasks,
             )
         ).model_dump(mode="json")
+        session_id = payload.get("sessionId")
         dashboard = payload.get("dashboard")
         if (
-            business_intelligence_service.uses_legacy_contract(session_id)
+            isinstance(session_id, str)
+            and business_intelligence_service.uses_legacy_contract(session_id)
             and isinstance(dashboard, dict)
             and isinstance(dashboard.get("datasetSummaries"), list)
             and dashboard["datasetSummaries"]
@@ -218,30 +191,6 @@ async def get_dashboard(
         raise HTTPException(
             status_code=500,
             detail="An unexpected error occurred while loading the dashboard.",
-        ) from error
-
-
-@router.post("/dashboard/{session_id}/rag/rebuild", status_code=202)
-def rebuild_dashboard_retrieval(
-    session_id: str,
-    background_tasks: BackgroundTasks,
-    current_user: AuthenticatedUser,
-) -> dict[str, str]:
-    try:
-        business_intelligence_service.rebuild_dashboard_retrieval(
-            session_id,
-            current_user.id,
-            background_tasks,
-        )
-        return {"status": "indexing", "message": "Retrieval index rebuild started."}
-    except SessionNotFoundError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
-    except ValueError as error:
-        raise HTTPException(status_code=422, detail=str(error)) from error
-    except Exception as error:
-        raise HTTPException(
-            status_code=500,
-            detail="An unexpected error occurred while rebuilding retrieval.",
         ) from error
 
 

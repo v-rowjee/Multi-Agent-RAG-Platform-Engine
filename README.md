@@ -30,19 +30,18 @@ profiles existing Supabase Auth accounts, and never drops or migrates objects.
 If the application schema already exists, use a dedicated migration instead of
 rerunning this bootstrap.
 
-All `/api/upload`, `/api/dashboard/{session_id}`, `/api/chat`, and
-`/api/chat/{session_id}/history` requests require an `Authorization: Bearer
+All workspace routes except `/api/health` and `/api/ready` require an `Authorization: Bearer
 <Supabase access JWT>` header. The backend validates the JWT and returns data
 only when the session belongs to its authenticated user.
 
 `POST /api/upload` accepts one to five repeated multipart `files` fields.
 Different schemas are prepared independently and synthesized into one
-session-scoped dashboard and retrieval index. `GET /api/dataset` returns the
-workspace plus its `datasets[]`; previews use
-`GET /api/dataset/preview?dataset_id=<uuid>&page=1&page_size=50`.
-Additional files can be appended with `POST /api/dataset` using the same
-repeated `files` fields, up to five total datasets. Remove one with
-`DELETE /api/dataset/{dataset_id}`. Both operations rebuild the dashboard and
+session-scoped dashboard and retrieval index. `GET /api/datasets` returns the
+active workspace plus its `datasets[]`; previews use
+`POST /api/datasets/preview` with `{ "datasetId", "page", "pageSize" }`.
+Additional files can be appended with the same `POST /api/upload` endpoint
+using repeated `files` fields, up to five total datasets. Remove one with
+`DELETE /api/datasets/{dataset_id}`. Both operations rebuild the dashboard and
 retrieval index, and clear chat history that was grounded in the previous file
 set. Removing the last dataset deletes the workspace.
 Chat questions use every dataset in the active workspace by default; naming a

@@ -79,6 +79,10 @@ class BusinessIntelligenceChatService:
         )
         return self.chat_with_single_agent(dataset, cleaned_query, history)
 
+    def chat_active(self, query: str, user_id: str) -> ChatResponse:
+        session, _ = self.workspaces.active_workspace(user_id)
+        return self.chat(session.id, query, user_id)
+
     def chat_with_multi_agent_pipeline(
         self,
         session_id: str,
@@ -374,6 +378,18 @@ class BusinessIntelligenceChatService:
                 for message in self.messages.get_recent_messages(session.id, limit=50)
             ],
         }
+
+    def get_active_chat_history(self, user_id: str) -> dict[str, Any]:
+        session, _ = self.workspaces.active_workspace(user_id)
+        return self.get_chat_history(session.id, user_id)
+
+    def clear_active_chat_history(self, user_id: str) -> None:
+        session, _ = self.workspaces.active_workspace(user_id)
+        if session.requires_reset:
+            raise SessionNotFoundError(
+                "This legacy workspace must be reset before chat history is available."
+            )
+        self.messages.delete_session_messages(session.id)
 
     def chat_message(
         self,

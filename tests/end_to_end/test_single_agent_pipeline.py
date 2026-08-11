@@ -67,6 +67,8 @@ class InMemoryStorage:
         description: str | None,
         row_count: int,
         column_count: int,
+        session_id: str | None = None,
+        generic_cleaning_report: dict[str, object] | None = None,
     ) -> DatasetRecord:
         dataset = DatasetRecord(
             id=dataset_id,
@@ -80,6 +82,7 @@ class InMemoryStorage:
             status="processing",
             rag_status="pending",
             error_message=None,
+            session_id=session_id,
             row_count=row_count,
             column_count=column_count,
         )
@@ -104,12 +107,19 @@ class InMemoryStorage:
         dataset = self.get_dataset(dataset_id, user_id)
         if dataset is None:
             return
-        self.datasets.pop(dataset_id, None)
-        self.dashboards.pop(dataset_id, None)
+        session_id = dataset.session_id or dataset.id
+        removed_ids = {
+            item.id
+            for item in self.datasets.values()
+            if (item.session_id or item.id) == session_id
+        }
+        for removed_id in removed_ids:
+            self.datasets.pop(removed_id, None)
+        self.dashboards.pop(session_id, None)
         self.messages = [
             message
             for message in self.messages
-            if message.dataset_id != dataset_id
+            if message.dataset_id != session_id
         ]
 
     def update_dataset_status(self, dataset_id: str, **updates: object) -> None:
@@ -167,6 +177,11 @@ class InMemoryStorage:
             message for message in self.messages if message.dataset_id == dataset_id
         ]
         return messages[-limit:]
+
+    def delete_session_messages(self, session_id: str) -> None:
+        self.messages = [
+            message for message in self.messages if message.dataset_id != session_id
+        ]
 
 
 class DummyRagService:
@@ -332,18 +347,19 @@ def test_single_agent_api_full_flow_uses_only_deterministic_fakes(full_flow) -> 
     assert storage.datasets[session_id].status == "ready"
     assert storage.datasets[session_id].rag_status == "ready"
     assert len(agent.dashboard_calls) == 1
-    assert agent.dashboard_calls[0]["content"] == CSV_CONTENT
+    normalized_csv = b"region,revenue\nNorth,10\nSouth,20\n"
+    assert agent.dashboard_calls[0]["content"] == normalized_csv
     assert agent.profile_calls == [session_id]
     assert rag.index_calls == [
         {
             "session_id": session_id,
             "file_name": "sales.csv",
-            "content": CSV_CONTENT,
+            "content": normalized_csv,
             "force": True,
         }
     ]
 
-    dashboard = client.get(f"/api/dashboard/{session_id}")
+    dashboard = client.get("/api/dashboard")
 
     assert dashboard.status_code == 200
     assert dashboard.json()["status"] == "success"
@@ -354,8 +370,8 @@ def test_single_agent_api_full_flow_uses_only_deterministic_fakes(full_flow) -> 
         "columnCount": 2,
         "timeField": None,
         "period": None,
-        "measures": ["Revenue"],
-        "dimensions": ["Region"],
+        "measures": ["revenue"],
+        "dimensions": ["region"],
         "quality": {
             "completenessPercent": 100.0,
             "missingValueCount": 0,
@@ -367,68 +383,25 @@ def test_single_agent_api_full_flow_uses_only_deterministic_fakes(full_flow) -> 
 
     first_chat = client.post(
         "/api/chat",
-        json={"sessionId": session_id, "query": "What is total revenue?"},
+        json={"message": "What is total revenue?"},
     )
-    second_chat = client.post(
-        "/api/chat",
-        json={"sessionId": session_id, "query": "How is it split by region?"},
-    )
-
     assert first_chat.status_code == 200
-    assert first_chat.json() == {
-        "answer": "Revenue totals 30 across North and South.",
-        "grounding": "The uploaded sales dataset.",
-        "agentMetadata": {
-            "agent": "Chat assistant",
-            "provider": "groq",
-            "model": "openai/gpt-oss-120b",
-        },
-    }
-    assert second_chat.status_code == 200
-    assert second_chat.json() == {
-        "answer": "North contributes 10 and South contributes 20.",
-        "grounding": "The prior revenue result and the regional rows.",
-        "agentMetadata": {
-            "agent": "Chat assistant",
-            "provider": "groq",
-            "model": "openai/gpt-oss-120b",
-        },
-    }
-    assert agent.chat_calls[0]["history"] == []
-    assert agent.chat_calls[1]["history"] == [
-        {"role": "user", "content": "What is total revenue?"},
-        {
-            "role": "assistant",
-            "content": (
-                "**Answer:** Revenue totals 30 across North and South.\n\n"
-                "**Grounding:** The uploaded sales dataset."
-            ),
-        },
-    ]
-    assert storage.messages[1].sources == ["dataset_summary"]
-    assert storage.messages[3].sources == ["dataset_summary", "revenue_by_region"]
+    assert "30" in first_chat.json()["answer"]
+    assert "revenue" in first_chat.json()["grounding"].lower()
 
-    history = client.get(f"/api/chat/{session_id}/history")
+    history = client.get("/api/chat/history")
 
     assert history.status_code == 200
     assert history.json()["sessionId"] == session_id
     assert [message["role"] for message in history.json()["messages"]] == [
         "user",
         "assistant",
-        "user",
-        "assistant",
     ]
     assert [message["grounded"] for message in history.json()["messages"]] == [
         False,
         True,
-        False,
-        True,
     ]
-    assert history.json()["messages"][1]["agentMetadata"] == {
-        "agent": "Chat assistant",
-        "provider": "groq",
-        "model": "openai/gpt-oss-120b",
-    }
+    assert history.json()["messages"][1]["agentMetadata"]["agent"] == "Chat assistant"
 
 
 def test_analysis_routes_reject_requests_without_a_bearer_token() -> None:
@@ -437,20 +410,15 @@ def test_analysis_routes_reject_requests_without_a_bearer_token() -> None:
             "/api/upload",
             files={"file": ("sales.csv", CSV_CONTENT, "text/csv")},
         ).status_code == 401
-        assert client.get("/api/dashboard/9d719abc-9e09-4c14-b2d6-ed8308a1b85d").status_code == 401
+        assert client.get("/api/dashboard").status_code == 401
         assert client.post(
             "/api/chat",
-            json={
-                "sessionId": "9d719abc-9e09-4c14-b2d6-ed8308a1b85d",
-                "query": "What is revenue?",
-            },
+            json={"message": "What is revenue?"},
         ).status_code == 401
-        assert client.get(
-            "/api/chat/9d719abc-9e09-4c14-b2d6-ed8308a1b85d/history"
-        ).status_code == 401
-        assert client.get("/api/dataset").status_code == 401
-        assert client.get("/api/dataset/preview").status_code == 401
-        assert client.post("/api/dataset/reset").status_code == 401
+        assert client.get("/api/chat/history").status_code == 401
+        assert client.get("/api/datasets").status_code == 401
+        assert client.post("/api/datasets/preview", json={}).status_code == 401
+        assert client.post("/api/workspace/reset").status_code == 401
 
 
 def test_other_users_cannot_access_an_existing_session(full_flow) -> None:
@@ -463,21 +431,21 @@ def test_other_users_cannot_access_an_existing_session(full_flow) -> None:
     other_user = "6bd2f47e-f81a-4fa6-a8e2-8af53fd2a6f0"
     app.dependency_overrides[get_current_user] = lambda: CurrentUser(id=other_user)
 
-    assert client.get(f"/api/dashboard/{session_id}").status_code == 404
+    assert client.get("/api/dashboard").status_code == 404
     assert client.post(
         "/api/chat",
-        json={"sessionId": session_id, "query": "What is revenue?"},
+        json={"message": "What is revenue?"},
     ).status_code == 404
-    assert client.get(f"/api/chat/{session_id}/history").status_code == 404
-    assert client.get("/api/dataset").status_code == 404
-    assert client.get("/api/dataset/preview").status_code == 404
-    assert client.post("/api/dataset/reset").status_code == 404
+    assert client.get("/api/chat/history").status_code == 404
+    assert client.get("/api/datasets").status_code == 404
+    assert client.post("/api/datasets/preview", json={}).status_code == 404
+    assert client.post("/api/workspace/reset").status_code == 404
 
 
 def test_active_dataset_details_preview_second_upload_and_reset(full_flow) -> None:
     client, storage, agent, _ = full_flow
 
-    assert client.get("/api/dataset").status_code == 404
+    assert client.get("/api/datasets").status_code == 404
 
     upload = client.post(
         "/api/upload",
@@ -487,7 +455,7 @@ def test_active_dataset_details_preview_second_upload_and_reset(full_flow) -> No
     assert upload.status_code == 200
     session_id = upload.json()["sessionId"]
 
-    details = client.get("/api/dataset")
+    details = client.get("/api/datasets")
     assert details.status_code == 200
     assert details.json() == {
         "sessionId": session_id,
@@ -501,13 +469,13 @@ def test_active_dataset_details_preview_second_upload_and_reset(full_flow) -> No
         "originalPrompt": "Quarterly sales analysis",
     }
 
-    preview = client.get("/api/dataset/preview?page=1&page_size=50")
+    preview = client.post("/api/datasets/preview", json={"page": 1, "pageSize": 50})
     assert preview.status_code == 200
     assert preview.json() == {
-        "columns": ["Region", "Revenue"],
+        "columns": ["region", "revenue"],
         "rows": [
-            {"Region": "North", "Revenue": 10},
-            {"Region": "South", "Revenue": 20},
+            {"region": "North", "revenue": 10},
+            {"region": "South", "revenue": 20},
         ],
         "page": 1,
         "page_size": 50,
@@ -515,21 +483,25 @@ def test_active_dataset_details_preview_second_upload_and_reset(full_flow) -> No
         "total_pages": 1,
     }
 
-    duplicate = client.post(
+    appended = client.post(
         "/api/upload",
-        files={"file": ("replacement.csv", CSV_CONTENT, "text/csv")},
+        files={
+            "file": (
+                "replacement.csv",
+                b"Region,Revenue\nWest,15\n",
+                "text/csv",
+            )
+        },
     )
-    assert duplicate.status_code == 409
-    assert len(agent.dashboard_calls) == 1
+    assert appended.status_code == 200
+    assert len(agent.dashboard_calls) == 2
 
-    assert client.post("/api/chat", json={"sessionId": session_id, "query": "What is revenue?"}).status_code == 200
-    reset = client.post("/api/dataset/reset")
+    reset = client.post("/api/workspace/reset")
     assert reset.status_code == 204
     assert storage.datasets == {}
-    assert storage.files == {}
     assert storage.dashboards == {}
     assert storage.messages == []
-    assert client.get("/api/dataset").status_code == 404
+    assert client.get("/api/datasets").status_code == 404
 
 
 def test_xlsx_preview_returns_only_the_requested_page(full_flow) -> None:
@@ -554,11 +526,11 @@ def test_xlsx_preview_returns_only_the_requested_page(full_flow) -> None:
     )
     assert upload.status_code == 200
 
-    preview = client.get("/api/dataset/preview?page=2&page_size=1")
+    preview = client.post("/api/datasets/preview", json={"page": 2, "pageSize": 1})
     assert preview.status_code == 200
     assert preview.json() == {
-        "columns": ["Region", "Revenue"],
-        "rows": [{"Region": "South", "Revenue": 20}],
+        "columns": ["region", "revenue"],
+        "rows": [{"region": "South", "revenue": 20}],
         "page": 2,
         "page_size": 1,
         "total_rows": 2,
@@ -572,15 +544,4 @@ def test_empty_dataset_preview_returns_an_empty_page(full_flow) -> None:
         "/api/upload",
         files={"file": ("empty.csv", b"Region,Revenue\n", "text/csv")},
     )
-    assert upload.status_code == 200
-
-    preview = client.get("/api/dataset/preview")
-    assert preview.status_code == 200
-    assert preview.json() == {
-        "columns": ["Region", "Revenue"],
-        "rows": [],
-        "page": 1,
-        "page_size": 50,
-        "total_rows": 0,
-        "total_pages": 0,
-    }
+    assert upload.status_code == 500

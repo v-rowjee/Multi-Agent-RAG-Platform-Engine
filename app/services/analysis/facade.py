@@ -255,6 +255,31 @@ class BusinessIntelligenceService:
             "message": "Datasets added and workspace analysis rebuilt successfully.",
         }
 
+    async def upload_files(
+        self,
+        files: list[UploadCandidate] | UploadCandidate | Any,
+        user_id: str,
+        description: str | None = None,
+        legacy_contract: bool = False,
+        background_tasks: BackgroundTaskScheduler | None = None,
+    ) -> dict[str, Any]:
+        """Create a workspace or append files to the user's active one."""
+        try:
+            self._workspace_service.active_workspace(user_id)
+        except SessionNotFoundError:
+            return await self.create_analysis(
+                files=files,
+                user_id=user_id,
+                description=description,
+                legacy_contract=legacy_contract,
+                background_tasks=background_tasks,
+            )
+        return await self.add_datasets(
+            files=files,
+            user_id=user_id,
+            background_tasks=background_tasks,
+        )
+
     async def remove_dataset(
         self,
         dataset_id: str,
@@ -353,6 +378,18 @@ class BusinessIntelligenceService:
             background_tasks=background_tasks,
         )
 
+    async def get_active_dashboard(
+        self,
+        user_id: str,
+        background_tasks: BackgroundTaskScheduler | None = None,
+    ) -> DashboardResponse:
+        session, _ = self._workspace_service.active_workspace(user_id)
+        return await self.get_dashboard(
+            session.id,
+            user_id,
+            background_tasks=background_tasks,
+        )
+
     def rebuild_dashboard_retrieval(
         self,
         session_id: str,
@@ -369,11 +406,32 @@ class BusinessIntelligenceService:
             background_tasks=background_tasks,
         )
 
+    def rebuild_active_chat_retrieval(
+        self,
+        user_id: str,
+        background_tasks: BackgroundTaskScheduler,
+    ) -> None:
+        session, _ = self._workspace_service.active_workspace(user_id)
+        self.rebuild_dashboard_retrieval(session.id, user_id, background_tasks)
+
+    def get_active_chat_status(self, user_id: str) -> dict[str, str]:
+        session, _ = self._workspace_service.active_workspace(user_id)
+        return {"status": session.rag_status}
+
     def chat(self, session_id: str, query: str, user_id: str) -> ChatResponse:
         return self._chat_service.chat(session_id, query, user_id)
 
+    def chat_active(self, query: str, user_id: str) -> ChatResponse:
+        return self._chat_service.chat_active(query, user_id)
+
     def get_chat_history(self, session_id: str, user_id: str) -> dict[str, Any]:
         return self._chat_service.get_chat_history(session_id, user_id)
+
+    def get_active_chat_history(self, user_id: str) -> dict[str, Any]:
+        return self._chat_service.get_active_chat_history(user_id)
+
+    def clear_active_chat_history(self, user_id: str) -> None:
+        self._chat_service.clear_active_chat_history(user_id)
 
     async def _run_workspace_pipeline(
         self,
