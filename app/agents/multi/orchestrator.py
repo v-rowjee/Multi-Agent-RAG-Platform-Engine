@@ -361,7 +361,13 @@ def _capability_gated_plan(
     proposed: OrchestrationPlan,
     supported_agents: set[AgentName],
 ) -> OrchestrationPlan:
-    """Keep the model's routing decision inside deterministic capability gates."""
+    """Keep model routing inside deterministic capability gates.
+
+    Forecasting is a core dashboard output whenever the prepared dataset
+    supports it.  The routing model can still influence optional analysis,
+    but it must not randomly omit an eligible forecast on otherwise identical
+    uploads.
+    """
     proposed_selected = set(proposed.selected_agents)
     proposed_decisions = {
         decision.agent: decision for decision in proposed.decisions
@@ -369,7 +375,8 @@ def _capability_gated_plan(
     selected_agents = [
         agent
         for agent in AGENT_ORDER
-        if agent in supported_agents and agent in proposed_selected
+        if agent in supported_agents
+        and (agent in proposed_selected or agent == "forecasting")
     ]
     decisions: list[AgentDecision] = []
 
@@ -380,6 +387,11 @@ def _capability_gated_plan(
         if agent not in supported_agents:
             reason = (
                 "Not selected because the dataset does not support this analysis."
+            )
+        elif agent == "forecasting":
+            reason = (
+                "Selected because the prepared dataset supports forecasting; "
+                "forecast generation is deterministic for eligible datasets."
             )
         elif proposed_decision is not None:
             reason = proposed_decision.reason

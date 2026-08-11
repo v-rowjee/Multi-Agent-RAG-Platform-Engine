@@ -9,24 +9,15 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from app.core.exceptions import (
-    DatasetAlreadyExistsError,
-    InvalidUploadError,
-)
+from app.core.exceptions import DatasetAlreadyExistsError, InvalidUploadError
 from app.schemas.api import UploadCandidate
-from app.services.analysis.files import (
-    MAX_UPLOAD_BYTES,
-    MAX_UPLOAD_FILES,
-    PARQUET_MIME_TYPE,
-    DatasetFileService,
-)
+from app.services.analysis.files import (MAX_UPLOAD_BYTES, MAX_UPLOAD_FILES,
+                                         PARQUET_MIME_TYPE, DatasetFileService)
 from app.services.analysis.models import InspectedUpload, UploadedWorkspace
 from app.services.data.cleaning import generic_clean_dataframe
-from app.services.persistence.analysis import (
-    AnalysisRepository,
-    AnalysisSessionRecord,
-    DatasetRecord,
-)
+from app.services.persistence.analysis import (AnalysisRepository,
+                                               AnalysisSessionRecord,
+                                               DatasetRecord)
 from app.services.persistence.supabase import SupabaseGateway
 
 logger = logging.getLogger(__name__)
@@ -84,7 +75,7 @@ class DatasetUploadService:
                 raise InvalidUploadError(f"'{file_name}' is empty.")
             if len(content) > MAX_UPLOAD_BYTES:
                 raise InvalidUploadError(
-                    f"'{file_name}' is larger than the 25 MiB limit."
+                    f"'{file_name}' is larger than the 50 MiB limit."
                 )
             file_hash = hashlib.sha256(content).hexdigest()
             if file_hash in hashes:

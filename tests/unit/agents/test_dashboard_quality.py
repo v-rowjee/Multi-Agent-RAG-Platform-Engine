@@ -673,6 +673,46 @@ def test_compound_plan_remains_inside_deterministic_capability_gates() -> None:
     assert "does not support" in forecast.reason
 
 
+def test_compound_plan_always_selects_eligible_forecasting() -> None:
+    prepared = {
+        "date_column": "transaction_date",
+        "primary_measures": ["net_revenue_gbp"],
+        "time_series_candidates": ["net_revenue_gbp"],
+        "temporal_profile": {"unique_periods": 24},
+        "capability_flags": {
+            "supports_kpis": True,
+            "supports_trends": True,
+            "supports_anomalies": True,
+            "supports_forecasting": True,
+            "has_temporal_data": True,
+        },
+    }
+
+    async def omit_forecasting(
+        _: dict[str, object],
+        __: set[str],
+    ) -> OrchestrationPlan:
+        return OrchestrationPlan(
+            selected_agents=["kpi_trend", "anomaly_detection"],
+            decisions=[
+                AgentDecision(
+                    agent="forecasting",
+                    selected=False,
+                    reason="No forecast was requested.",
+                )
+            ],
+        )
+
+    plan = asyncio.run(OrchestratorAgent(planner=omit_forecasting).run(prepared))
+
+    assert plan.selected_agents == ["kpi_trend", "anomaly_detection", "forecasting"]
+    forecast = next(
+        decision for decision in plan.decisions if decision.agent == "forecasting"
+    )
+    assert forecast.selected is True
+    assert "deterministic" in forecast.reason
+
+
 def test_compound_failure_uses_deterministic_capability_routing() -> None:
     prepared = {
         "date_column": "transaction_date",
