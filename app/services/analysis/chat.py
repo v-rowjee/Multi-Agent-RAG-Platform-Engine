@@ -59,25 +59,16 @@ class BusinessIntelligenceChatService:
                 "The retrieval index is unavailable. Rebuild the workspace before "
                 "using chat."
             )
-        if (
-            self.settings.bi_pipeline_mode == "multi"
-            or len(datasets) > 1
-            or datasets[0].session_id is not None
-        ):
+        if self.settings.bi_pipeline_mode == "multi":
             return self.chat_with_multi_agent_pipeline(session.id, query, datasets)
-
-        dataset = datasets[0]
         cleaned_query = query.strip()
         if not cleaned_query:
             raise ValueError("The chat query cannot be empty.")
-        history = self.chat_history(dataset.id)
-        self.messages.save_message(
-            dataset_id=dataset.id,
-            role="user",
-            content=cleaned_query,
-            sources=[],
+        return self.chat_with_single_agent_workspace(
+            session.id,
+            datasets,
+            cleaned_query,
         )
-        return self.chat_with_single_agent(dataset, cleaned_query, history)
 
     def chat_active(self, query: str, user_id: str) -> ChatResponse:
         session, _ = self.workspaces.active_workspace(user_id)
@@ -272,6 +263,44 @@ class BusinessIntelligenceChatService:
             source_ids = []
         return self.save_chat_response(dataset.id, response, source_ids)
 
+    def chat_with_single_agent_workspace(
+        self,
+        session_id: str,
+        datasets: list[DatasetRecord],
+        query: str,
+    ) -> ChatResponse:
+        """Run the single-agent chat mode against the entire active workspace."""
+        history = self.chat_history(session_id)
+        self.messages.save_message(
+            dataset_id=session_id,
+            role="user",
+            content=query,
+            sources=[],
+        )
+        contents = [
+            self.storage.download_file(dataset.storage_path)
+            for dataset in datasets
+        ]
+        try:
+            with self.files.temporary_workspace_agent_input(
+                session_id,
+                datasets,
+                contents,
+            ) as agent_input:
+                response, source_ids = self.chat_with_agent_input(
+                    agent_input,
+                    query,
+                    history,
+                )
+        except Exception:
+            logger.exception(
+                "Single-agent workspace chat preparation failed session_id=%s",
+                session_id,
+            )
+            response = "The analysis assistant could not answer this question at the moment."
+            source_ids = []
+        return self.save_chat_response(session_id, response, source_ids)
+
     def chat_with_agent(
         self,
         dataset: DatasetRecord,
@@ -279,28 +308,33 @@ class BusinessIntelligenceChatService:
         query: str,
         history: list[dict[str, str]],
     ) -> tuple[str, list[str]]:
+        with self.files.temporary_agent_input(dataset, content) as agent_input:
+            return self.chat_with_agent_input(agent_input, query, history)
+
+    def chat_with_agent_input(
+        self,
+        agent_input: BusinessIntelligenceAgentInput,
+        query: str,
+        history: list[dict[str, str]],
+    ) -> tuple[str, list[str]]:
         try:
-            with self.files.temporary_agent_input(dataset, content) as agent_input:
-                agent = (
-                    self.single_agent
-                    or _single_agent()
-                )
-                response = agent.chat(
-                    agent_input=agent_input,
-                    query=query,
-                    history=history,
-                )
-                source_ids = agent.source_ids_for_session(dataset.id)
+            agent = self.single_agent or _single_agent()
+            response = agent.chat(
+                agent_input=agent_input,
+                query=query,
+                history=history,
+            )
+            source_ids = agent.source_ids_for_session(agent_input.sessionId)
             return response, source_ids
         except Exception:
             logger.exception(
                 "Business intelligence agent failed session_id=%s operation=chat",
-                dataset.id,
+                agent_input.sessionId,
             )
             return (
                 "**Answer:** I cannot answer from the dataset profile because "
                 "the AI business intelligence agent is currently unavailable.\n\n"
-                f"**Grounding:** Dataset '{dataset.file_name}'; user asked '{query}'.",
+                f"**Grounding:** Dataset '{agent_input.fileName}'; user asked '{query}'.",
                 [],
             )
 

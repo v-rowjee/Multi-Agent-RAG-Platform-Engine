@@ -183,6 +183,29 @@ class DatasetFileService:
         frame.columns = columns
         return frame
 
+    def workspace_dataframe(
+        self,
+        datasets: list[DatasetRecord],
+        contents: list[bytes],
+    ) -> pd.DataFrame:
+        """Build the one normalized DataFrame shared by both pipeline modes."""
+        if len(datasets) != len(contents) or not datasets:
+            raise ValueError("Every workspace dataset requires source content.")
+        frames = [
+            self.read_workspace_dataframe(dataset.storage_path, content)
+            for dataset, content in zip(datasets, contents, strict=True)
+        ]
+        if len(frames) == 1:
+            return frames[0]
+
+        source_column = "__workspace_source_dataset__"
+        existing = {str(column) for frame in frames for column in frame.columns}
+        while source_column in existing:
+            source_column = f"_{source_column}_"
+        for dataset, frame in zip(datasets, frames, strict=True):
+            frame[source_column] = dataset.file_name
+        return pd.concat(frames, ignore_index=True, sort=False)
+
     def read_preview_page(
         self,
         file_name: str,
@@ -304,4 +327,28 @@ class DatasetFileService:
                     description=dataset.description,
                 ),
                 workspace,
+            )
+
+    @contextmanager
+    def temporary_workspace_agent_input(
+        self,
+        session_id: str,
+        datasets: list[DatasetRecord],
+        contents: list[bytes],
+    ) -> Iterator[BusinessIntelligenceAgentInput]:
+        """Adapt a workspace to the single agent's temporary CSV contract."""
+        dataframe = self.workspace_dataframe(datasets, contents)
+        with tempfile.TemporaryDirectory(prefix="bi_workspace_") as directory:
+            path = Path(directory) / "workspace.csv"
+            dataframe.to_csv(path, index=False, lineterminator="\n")
+            yield BusinessIntelligenceAgentInput(
+                sessionId=session_id,
+                datasetId=session_id,
+                filePath=str(path),
+                fileName=(
+                    datasets[0].file_name
+                    if len(datasets) == 1
+                    else "all_uploaded_datasets.csv"
+                ),
+                description=datasets[0].description,
             )

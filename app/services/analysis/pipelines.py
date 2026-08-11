@@ -113,26 +113,9 @@ class AnalysisPipelineRunner:
         contents: list[bytes],
     ) -> tuple[DatasetRecord, bytes, pd.DataFrame]:
         """Build a workspace input once and retain its in-memory DataFrame."""
+        combined = self.files.workspace_dataframe(datasets, contents)
         if len(datasets) == 1:
-            return (
-                datasets[0],
-                contents[0],
-                self.files.read_workspace_dataframe(
-                    datasets[0].storage_path,
-                    contents[0],
-                ),
-            )
-        frames = [
-            self.files.read_workspace_dataframe(dataset.storage_path, content)
-            for dataset, content in zip(datasets, contents, strict=True)
-        ]
-        source_column = "__workspace_source_dataset__"
-        existing = {str(column) for frame in frames for column in frame.columns}
-        while source_column in existing:
-            source_column = f"_{source_column}_"
-        for dataset, frame in zip(datasets, frames, strict=True):
-            frame[source_column] = dataset.file_name
-        combined = pd.concat(frames, ignore_index=True, sort=False)
+            return datasets[0], contents[0], combined
         content = self.files.dataframe_to_parquet(combined)
         return (
             replace(

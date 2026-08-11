@@ -6,7 +6,7 @@ import pytest
 import toons
 
 import app.core.prompt_loader as prompt_module
-from app.core.config import (AGENT_PROFILES_DIR, CONFIG_PATH, RAG_CONFIG_PATH,
+from app.core.config import (AGENT_PROFILES_DIR, RAG_CONFIG_PATH,
                              RuntimeConfigurationError, get_runtime_config,
                              get_cors_allowed_origins, get_settings, load_rag_config,
                              load_runtime_config)
@@ -16,11 +16,13 @@ from app.core.prompt_loader import (PROMPTS_ROOT, PromptTemplateError,
 from app.schemas.data_preparation import PreparationPlan
 
 
-def test_checked_in_configuration_uses_the_aligned_agent_models() -> None:
+def test_checked_in_configuration_uses_the_aligned_agent_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BI_PIPELINE_MODE", "multi")
     config = load_runtime_config()
 
     assert config.pipeline_mode == "multi"
-    assert config.agent_profile == "groq"
     assert {
         name: (policy.provider, policy.model)
         for name, policy in config.agents.items()
@@ -47,14 +49,26 @@ def test_checked_in_configuration_uses_the_aligned_agent_models() -> None:
     assert config.agents["dashboard_generation"].timeout_seconds == 120
 
 
-def test_environment_does_not_override_versioned_agent_configuration(monkeypatch) -> None:
+def test_pipeline_mode_is_read_from_environment(monkeypatch) -> None:
     monkeypatch.setenv("BI_PIPELINE_MODE", "single")
     monkeypatch.setenv("GROQ_MODEL_DATA_PREPARATION", "not-a-configured-model")
     get_runtime_config.cache_clear()
 
-    assert get_settings().bi_pipeline_mode == "multi"
+    assert get_settings().bi_pipeline_mode == "single"
     assert get_runtime_config().agents["data_preparation"].model == "openai/gpt-oss-20b"
 
+    monkeypatch.delenv("BI_PIPELINE_MODE")
+    get_runtime_config.cache_clear()
+
+
+def test_invalid_environment_pipeline_mode_is_rejected(monkeypatch) -> None:
+    monkeypatch.setenv("BI_PIPELINE_MODE", "unsupported")
+    get_runtime_config.cache_clear()
+
+    with pytest.raises(RuntimeConfigurationError, match="BI_PIPELINE_MODE"):
+        get_runtime_config()
+
+    monkeypatch.delenv("BI_PIPELINE_MODE")
     get_runtime_config.cache_clear()
 
 
@@ -111,16 +125,13 @@ def test_invalid_rag_configuration_is_rejected(tmp_path: Path) -> None:
         load_rag_config(config_path)
 
 
-def test_invalid_pipeline_mode_is_rejected(tmp_path: Path) -> None:
-    content = CONFIG_PATH.read_text(encoding="utf-8").replace(
-        'pipeline_mode = "multi"',
-        'pipeline_mode = "invalid"',
-    )
-    config_path = tmp_path / "runtime.toml"
-    config_path.write_text(content, encoding="utf-8")
+def test_pipeline_mode_must_be_configured_in_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("BI_PIPELINE_MODE", raising=False)
 
-    with pytest.raises(RuntimeConfigurationError, match="runtime.pipeline_mode"):
-        load_runtime_config(config_path)
+    with pytest.raises(RuntimeConfigurationError, match="BI_PIPELINE_MODE"):
+        load_runtime_config()
 
 
 def test_cors_allowed_origins_are_read_from_environment(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -146,17 +157,24 @@ def test_cors_allowed_origins_default_includes_production_frontend(
     )
 
 
-def test_invalid_agent_provider_and_model_are_rejected(tmp_path: Path) -> None:
-    runtime_path = tmp_path / "runtime.toml"
-    runtime_path.write_text(CONFIG_PATH.read_text(encoding="utf-8"), encoding="utf-8")
+def test_invalid_agent_provider_and_model_are_rejected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BI_PIPELINE_MODE", "multi")
     profile_path = tmp_path / "agents.groq.toml"
+    single_profile_path = tmp_path / "agents.single.toml"
+    single_profile_path.write_text(
+        (AGENT_PROFILES_DIR / "agents.single.toml").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     content = (AGENT_PROFILES_DIR / "agents.groq.toml").read_text(encoding="utf-8").replace(
         'provider = "groq"', 'provider = "unsupported"', 1
     )
     profile_path.write_text(content, encoding="utf-8")
 
     with pytest.raises(RuntimeConfigurationError, match="provider"):
-        load_runtime_config(runtime_path, profiles_dir=tmp_path)
+        load_runtime_config(profiles_dir=tmp_path)
 
     profile_path.write_text(
         (AGENT_PROFILES_DIR / "agents.groq.toml").read_text(encoding="utf-8").replace(
@@ -165,37 +183,7 @@ def test_invalid_agent_provider_and_model_are_rejected(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     with pytest.raises(RuntimeConfigurationError, match="model"):
-        load_runtime_config(runtime_path, profiles_dir=tmp_path)
-
-
-def test_mix_profile_can_be_selected_from_runtime_configuration(tmp_path: Path) -> None:
-    content = CONFIG_PATH.read_text(encoding="utf-8").replace(
-        'agent_profile = "groq"',
-        'agent_profile = "mix"',
-    )
-    config_path = tmp_path / "runtime.toml"
-    config_path.write_text(content, encoding="utf-8")
-
-    config = load_runtime_config(config_path)
-
-    assert config.agent_profile == "mix"
-    assert config.agents["data_preparation"].provider == "groq"
-    assert config.agents["anomaly_detection"].provider == "openrouter"
-
-
-def test_each_checked_in_agent_profile_is_complete_and_loadable(tmp_path: Path) -> None:
-    for profile in ("groq", "mix"):
-        runtime_path = tmp_path / f"runtime-{profile}.toml"
-        runtime_path.write_text(
-            CONFIG_PATH.read_text(encoding="utf-8").replace(
-                'agent_profile = "groq"',
-                f'agent_profile = "{profile}"',
-            ),
-            encoding="utf-8",
-        )
-        config = load_runtime_config(runtime_path)
-        assert config.agent_profile == profile
-        assert len(config.agents) == 9
+        load_runtime_config(profiles_dir=tmp_path)
 
 
 def test_prompt_bundles_validate_and_render_structured_toon() -> None:

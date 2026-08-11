@@ -139,10 +139,26 @@ def _raw_row_documents(
 
 
 class RetrievalPreparationAgent:
-    async def run(self, prepared_dataset: dict[str, Any], dataframe: pd.DataFrame, kpi_trend_output: dict[str, Any] | None, anomaly_output: dict[str, Any] | None, forecasting_output: dict[str, Any] | None, synthesis_output: dict[str, Any], dashboard_output: dict[str, Any] | None = None) -> RetrievalPreparationOutput:
+    async def run(
+        self,
+        prepared_dataset: dict[str, Any],
+        dataframe: pd.DataFrame | None = None,
+        kpi_trend_output: dict[str, Any] | None = None,
+        anomaly_output: dict[str, Any] | None = None,
+        forecasting_output: dict[str, Any] | None = None,
+        synthesis_output: dict[str, Any] | None = None,
+        dashboard_output: dict[str, Any] | None = None,
+    ) -> RetrievalPreparationOutput:
         prepared = prepared_dataset if isinstance(prepared_dataset, dict) else {}
         kpi, anomaly, forecast = kpi_trend_output or {}, anomaly_output or {}, forecasting_output or {}
         synthesis = synthesis_output if isinstance(synthesis_output, dict) else {}
+        if dataframe is None:
+            prepared_path = str(prepared.get("prepared_file_path") or "").strip()
+            if prepared_path:
+                try:
+                    dataframe = pd.read_csv(prepared_path)
+                except Exception:
+                    dataframe = None
         profile = prepared.get("dataset_profile") or {}
         currency = profile.get("currency") or prepared.get("currency")
         documents: list[RetrievalDocument] = []

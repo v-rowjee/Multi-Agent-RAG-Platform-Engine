@@ -5,8 +5,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import pandas as pd
 from app.agents.multi.retrieval_preparation import dashboard_retrieval_documents
 from app.core.config import Settings
+from app.rag.indexing.document_builder import DatasetDocumentBuilder
 from app.schemas.api import ApiMessage, DashboardResponse
 from app.services.analysis.dashboards import DashboardAssembler
 from app.services.analysis.files import DatasetFileService
@@ -34,6 +36,7 @@ class AnalysisExecutionPersistenceService:
         analysis: AnalysisRepository | Any,
         indexing: Any,
         retriever: Any,
+        storage: Any,
         settings: Settings,
         files: DatasetFileService,
         dashboards: DashboardAssembler,
@@ -42,6 +45,7 @@ class AnalysisExecutionPersistenceService:
         self.analysis = analysis
         self.indexing = indexing
         self.retriever = retriever
+        self.storage = storage
         self.settings = settings
         self.files = files
         self.dashboards = dashboards
@@ -81,9 +85,16 @@ class AnalysisExecutionPersistenceService:
                 )
             return response
 
-        documents = list(execution.retrieval_documents or [])
-        if self.settings.bi_pipeline_mode == "single" and response.status != "failed":
-            documents = self.single_workspace_documents(session, datasets, contents)
+        documents = (
+            self.workspace_retrieval_documents(
+                session=session,
+                datasets=datasets,
+                contents=contents,
+                response=response,
+            )
+            if response.status != "failed"
+            else []
+        )
 
         if background_tasks is not None and response.status != "failed":
             workflow = self._workflow(
@@ -224,12 +235,16 @@ class AnalysisExecutionPersistenceService:
         if dashboard_record is None:
             raise ValueError("Generate the dashboard before rebuilding retrieval.")
         response = DashboardResponse.model_validate(dashboard_record.response)
-        documents = [
-            item.model_dump(mode="json")
-            for item in dashboard_retrieval_documents(
-                response.model_dump(mode="json")
-            )
+        contents = [
+            self.storage.download_file(dataset.storage_path)
+            for dataset in datasets
         ]
+        documents = self.workspace_retrieval_documents(
+            session=session,
+            datasets=datasets,
+            contents=contents,
+            response=response,
+        )
         if not documents:
             raise ValueError("The saved dashboard contains no retrieval evidence.")
         documents = self.dashboards.workspace_retrieval_documents(
@@ -342,6 +357,78 @@ class AnalysisExecutionPersistenceService:
                 session.id,
             )
             return []
+
+    def workspace_retrieval_documents(
+        self,
+        *,
+        session: AnalysisSessionRecord,
+        datasets: list[DatasetRecord],
+        contents: list[bytes],
+        response: DashboardResponse,
+    ) -> list[dict[str, Any]]:
+        """Build the durable chat corpus identically for either pipeline mode.
+
+        Dashboard evidence and bounded cleaned-row evidence are both derived
+        from persisted workspace state. Consequently a rebuild replaces the
+        same document shape that initial analysis produced.
+        """
+        documents = [
+            item.model_dump(mode="json")
+            for item in dashboard_retrieval_documents(response.model_dump(mode="json"))
+        ]
+        try:
+            dataframe = self.files.workspace_dataframe(datasets, contents)
+            measures = [
+                str(column)
+                for column in dataframe.columns
+                if pd.api.types.is_numeric_dtype(dataframe[column])
+            ]
+            dimensions = [
+                str(column)
+                for column in dataframe.columns
+                if str(column) not in measures
+            ]
+            date_field = next(
+                (
+                    str(column)
+                    for column in dataframe.columns
+                    if pd.api.types.is_datetime64_any_dtype(dataframe[column])
+                    or any(
+                        token in str(column).casefold()
+                        for token in ("date", "time", "year", "month", "period")
+                    )
+                ),
+                None,
+            )
+            row_documents = DatasetDocumentBuilder().build_row_documents(
+                df=dataframe,
+                session_id=session.id,
+                file_name="all_uploaded_datasets.csv",
+                measures=measures,
+                dimensions=dimensions,
+                date_field=date_field,
+            )
+            for index, document in enumerate(row_documents):
+                metadata = dict(document.metadata)
+                source_id = str(metadata.get("source_id") or f"row_batch_{index}")
+                documents.append(
+                    {
+                        "id": f"{session.id}:{source_id}",
+                        "content": document.page_content,
+                        "document_type": "row_batch",
+                        "metadata": metadata,
+                    }
+                )
+        except Exception:
+            logger.exception(
+                "Workspace row-evidence preparation failed session_id=%s",
+                session.id,
+            )
+        return self.dashboards.workspace_retrieval_documents(
+            session,
+            datasets,
+            documents,
+        )
 
     def try_index_rag(self, dataset: DatasetRecord, content: bytes) -> bool:
         try:

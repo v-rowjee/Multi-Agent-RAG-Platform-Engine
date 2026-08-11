@@ -19,7 +19,6 @@ from pydantic import BaseModel, Field
 from app.core.config import agent_model_policy
 from app.core.llm import create_chat_model
 from app.core.prompt_loader import render_agent_prompts
-from app.rag.indexing.indexing_service import indexing_service
 from app.rag.models import RerankedDocument, RetrievedDocument
 from app.rag.retrieval.retriever import compact_profile_for_chat, retriever
 from app.schemas.api import BusinessIntelligenceAgentInput, DashboardResponse
@@ -207,8 +206,6 @@ class BusinessIntelligenceAgent:
         state: AgentState,
     ) -> dict[str, list[RetrievedDocument]]:
         agent_input = state["agent_input"]
-        if not indexing_service.ensure_index(agent_input, state["profile"]):
-            return {"retrieved_documents": []}
         documents = retriever.retrieve(
             session_id=agent_input.sessionId,
             query=state["query"],

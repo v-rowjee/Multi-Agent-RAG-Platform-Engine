@@ -49,28 +49,24 @@ file explicitly narrows the answer to that dataset.
 
 ## Pipeline mode
 
-Set global runtime mode and the model profile in `config/runtime.toml`:
+The backend always uses the version-controlled Groq agent profile in
+`config/agents.groq.toml`. Select the pipeline with the required environment
+variable:
 
-```toml
-[runtime]
-# "groq" uses Groq only; "mix" uses the Groq + OpenRouter profile.
-agent_profile = "groq"
-# Change to "single" for the one-agent dashboard and chat workflow.
-pipeline_mode = "multi"
+```dotenv
+BI_PIPELINE_MODE=multi
+# or: BI_PIPELINE_MODE=single
 ```
 
-`multi` is the checked-in default. The two modes expose
+Restart the backend after changing it. The two modes expose
 the same upload, dashboard, chat, and chat-history API contracts.
 
-The selected complete multi-agent profile (`config/agents.groq.toml` or
-`config/agents.mix.toml`) selects the provider, model, generation limits, and
-reasoning effort for every LLM invocation. Both profiles are validated against
-the same required multi-agent set at startup. The independent
+The Groq multi-agent profile selects the provider, model, generation limits,
+and reasoning effort for every LLM invocation. The independent
 `config/agents.single.toml` file contains the single-dashboard and single-chat
 policies. Each LLM agent has one versioned
 TOON bundle in `app/prompts/`; the backend validates the bundle at startup and
 serializes its structured system and user context as TOON before invocation.
-Mode and model settings are deliberately not read from `.env`.
 The permitted browser origins are read from `.env` at startup:
 
 ```dotenv
@@ -88,7 +84,7 @@ Keep API keys, Supabase credentials, and other secrets in `.env` only.
 `groq` is the checked-in default and uses Groq for every LLM call. `mix` keeps
 Groq for fast routing, KPI, and chat calls while assigning anomaly detection,
 insight synthesis, dashboard generation, and the single dashboard to OpenRouter.
-Select the profile only in `runtime.toml`; do not partially edit a profile.
+The Groq profile is the only production profile; do not partially edit it.
 
 Generic cleaning, specialist join, and Supabase persistence are non-LLM
 steps. Forecast output is passed directly to insight synthesis, so the optional
@@ -104,9 +100,8 @@ OPENROUTER_API_KEY=your-openrouter-api-key
 
 Changing `provider` does not change the agent prompts, response schemas,
 deterministic validation, fallback behavior, or API contracts.
-Restart the backend after changing `config/runtime.toml` or an agent profile;
-runtime configuration is loaded and validated once at process startup. Missing
-credentials for a provider used by the active profile fail startup immediately.
+Runtime configuration is loaded and validated once at process startup. Missing
+credentials for the active mode fail startup immediately.
 
 Structured LLM requests make up to three bounded provider attempts. Models
 without native schema enforcement receive the exact JSON Schema in their

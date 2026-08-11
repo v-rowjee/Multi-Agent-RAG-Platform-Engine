@@ -13,14 +13,11 @@ from dotenv import load_dotenv
 
 PipelineMode = Literal["single", "multi"]
 AgentProvider = Literal["groq", "openrouter"]
-AgentProfile = Literal["groq", "mix"]
 ReasoningEffort = Literal["none", "low", "medium", "high"] | None
 
 CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
-RUNTIME_CONFIG_PATH = CONFIG_DIR / "runtime.toml"
-# Retained as a public alias for callers that imported the old name.
-CONFIG_PATH = RUNTIME_CONFIG_PATH
 AGENT_PROFILES_DIR = CONFIG_DIR
+GROQ_AGENT_CONFIG_PATH = CONFIG_DIR / "agents.groq.toml"
 SINGLE_AGENT_CONFIG_PATH = CONFIG_DIR / "agents.single.toml"
 RAG_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "rag.toml"
 
@@ -47,7 +44,6 @@ class AgentModelPolicy:
 @dataclass(frozen=True)
 class RuntimeConfiguration:
     pipeline_mode: PipelineMode
-    agent_profile: AgentProfile
     agents: Mapping[str, AgentModelPolicy]
 
 
@@ -232,26 +228,17 @@ def _load_agent_policies(
 
 
 def load_runtime_config(
-    path: Path = CONFIG_PATH,
     *,
     profiles_dir: Path = AGENT_PROFILES_DIR,
 ) -> RuntimeConfiguration:
-    """Load global runtime settings and one complete, compatible agent profile."""
-    raw = _load_toml(path, label="Runtime configuration")
-
-    runtime = raw.get("runtime", {})
-    if not isinstance(runtime, dict):
-        raise RuntimeConfigurationError("'runtime' must be a TOML table")
-    mode = _get_str(runtime, "pipeline_mode").lower()
+    """Load the fixed Groq profile and required environment-selected mode."""
+    mode = os.environ.get("BI_PIPELINE_MODE", "").strip().lower()
     if mode not in {"single", "multi"}:
-        raise RuntimeConfigurationError("runtime.pipeline_mode must be either 'single' or 'multi'")
-    profile = _get_str(runtime, "agent_profile").lower()
-    if profile not in {"groq", "mix"}:
         raise RuntimeConfigurationError(
-            "runtime.agent_profile must be either 'groq' or 'mix'"
+            "BI_PIPELINE_MODE must be set to either 'single' or 'multi'"
         )
 
-    profile_path = profiles_dir / f"agents.{profile}.toml"
+    profile_path = profiles_dir / GROQ_AGENT_CONFIG_PATH.name
     profile_config = _load_toml(profile_path, label="Agent profile")
     multi_agent_names = {
         "data_preparation",
@@ -269,7 +256,7 @@ def load_runtime_config(
         label="Agent profile",
     )
     single_config = _load_toml(
-        SINGLE_AGENT_CONFIG_PATH,
+        profiles_dir / SINGLE_AGENT_CONFIG_PATH.name,
         label="Single-agent configuration",
     )
     agents.update(
@@ -281,7 +268,6 @@ def load_runtime_config(
     )
     return RuntimeConfiguration(
         pipeline_mode=mode,  # type: ignore[arg-type]
-        agent_profile=profile,  # type: ignore[arg-type]
         agents=agents,
     )
 

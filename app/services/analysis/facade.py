@@ -43,12 +43,11 @@ from app.services.persistence.supabase import (
 
 logger = logging.getLogger(__name__)
 
-# Retain this patch point for existing integrations/tests while avoiding graph
-# compilation as a side effect of importing the API service.
-analysis_graph: Any | None = None
-
-
 def _multi_agent_graph() -> Any:
+    # The stable public service module owns the single supported graph override
+    # seam. Import lazily to avoid an import cycle during application startup.
+    from app.services.business_intelligence import analysis_graph
+
     return analysis_graph or get_analysis_graph()
 
 
@@ -142,6 +141,7 @@ class BusinessIntelligenceService:
                 analysis=self.analysis,
                 indexing=self._indexing_service,
                 retriever=self._retriever,
+                storage=self.storage,
                 settings=self.settings,
                 files=self._file_service,
                 dashboards=self._dashboard_assembler,
