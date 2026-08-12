@@ -27,6 +27,7 @@ from app.core.config import configured_agent_models
 from app.schemas.dashboard import DashboardLayoutPlan, SupportingChartSpec
 from app.schemas.orchestration import AgentDecision, OrchestrationPlan
 from app.schemas.specialists import (
+    KPIDefinition,
     KPIRequest,
     KPITrendPlan,
     KPIValueDefinition,
@@ -263,7 +264,7 @@ def test_kpi_title_requests_are_resolved_independently_before_calculation(
     assert execution_status == "succeeded"
 
 
-def test_kpi_query_parser_accepts_only_safe_scalar_pandas_expressions() -> None:
+def test_kpi_query_parser_accepts_only_safe_pandas_expressions() -> None:
     frame = _rows(2)
 
     assert kpi_trend_module._parse_pandas_query(
@@ -277,6 +278,38 @@ def test_kpi_query_parser_accepts_only_safe_scalar_pandas_expressions() -> None:
         )
         is None
     )
+
+
+def test_ratio_kpi_uses_the_latest_reporting_period_not_the_llm_fallback() -> None:
+    frame = _rows()
+    frame["transaction_id"] = [f"txn-{index}" for index in range(len(frame))]
+    definition = KPIDefinition(
+        id="kpi_average_profit_per_transaction",
+        title="Average Profit per Transaction",
+        query='df["profit_gbp"].sum() / df["transaction_id"].count()',
+        measure="profit_gbp",
+        aggregation="sum",
+        fallback_value=0,
+    )
+    prepared = {
+        "date_column": "transaction_date",
+        "time_granularity": "month",
+    }
+
+    validated, _, warnings = kpi_trend_module._valid_plan(
+        [definition], [], frame, prepared
+    )
+    results, calculation_warnings = kpi_trend_module._calculate_kpis(
+        frame, validated, prepared
+    )
+
+    assert not warnings and not calculation_warnings
+    assert kpi_trend_module._parse_pandas_query(definition.query, frame) == (
+        "profit_gbp", "ratio", None, None
+    )
+    assert results[0].value == 438.0
+    assert results[0].current_period == "2024-12"
+    assert results[0].value_source == "pandas"
 
 
 def test_kpi_query_typo_uses_the_llm_fallback_value(
@@ -386,6 +419,33 @@ def test_forecast_horizon_is_one_quarter_of_observed_months(
         "2024-02",
         "2024-03",
     ]
+
+
+def test_short_temporal_series_uses_a_mandatory_deterministic_forecast(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "two_months_of_sales.csv"
+    _rows(2).to_csv(path, index=False)
+    prepared = _prepared(path)
+    prepared["temporal_profile"]["unique_periods"] = 2
+    prepared["capability_flags"]["supports_forecasting"] = False
+
+    async def chronos_must_not_run(*_: Any, **__: Any):
+        raise AssertionError("Chronos-2 should not run for a short time series.")
+
+    monkeypatch.setattr(
+        forecasting_module.forecasting_service,
+        "forecast",
+        chronos_must_not_run,
+    )
+    result = asyncio.run(ForecastingAgent().run(prepared))
+
+    assert result.status == "complete"
+    assert result.model == "linear_trend"
+    assert len(result.historical) == 2
+    assert len(result.forecast) == 1
+    assert any("requires at least 4 historical periods" in item for item in result.limitations)
 
 
 def test_dashboard_has_non_temporal_charts_forecast_and_actions(
@@ -511,6 +571,51 @@ def test_dashboard_has_non_temporal_charts_forecast_and_actions(
     assert failure_reason is None
 
 
+def test_forecast_target_is_promoted_over_a_mismatched_timeline_selection() -> None:
+    trends = [
+        {
+            "id": "trend_quantity_month",
+            "measure": "quantity",
+            "aggregation": "sum",
+            "granularity": "month",
+        },
+        {
+            "id": "trend_net_revenue_month",
+            "measure": "net_revenue_gbp",
+            "aggregation": "sum",
+            "granularity": "month",
+        },
+    ]
+    plan = DashboardLayoutPlan(
+        title="Sales performance",
+        selected_trend_ids=["trend_quantity_month"],
+    )
+
+    validated = dashboard_module._validated_plan(
+        plan,
+        plan,
+        [],
+        trends,
+        [],
+        [],
+        [],
+        {
+            "measure": "net_revenue_gbp",
+            "aggregation": "sum",
+            "granularity": "month",
+            "forecast": [{"period": "2026-01", "value": 26000}],
+        },
+        {},
+        pd.DataFrame(),
+    )
+
+    assert validated.selected_trend_ids == [
+        "trend_net_revenue_month",
+        "trend_quantity_month",
+    ]
+    assert validated.include_forecast is True
+
+
 def test_chart_selection_replaces_redundant_model_specs_with_complementary_charts(
     tmp_path: Path,
 ) -> None:
@@ -619,7 +724,7 @@ def test_production_planning_agents_enable_their_llm_calls() -> None:
     assert orchestrator_agent._planner is _request_plan
 
 
-def test_compound_plan_remains_inside_deterministic_capability_gates() -> None:
+def test_compound_plan_mandates_forecasting_for_short_temporal_series() -> None:
     prepared = {
         "date_column": "transaction_date",
         "primary_measures": ["net_revenue_gbp"],
@@ -642,9 +747,9 @@ def test_compound_plan_remains_inside_deterministic_capability_gates() -> None:
             "kpi_analysis": True,
             "trend_analysis": True,
             "anomaly_detection": True,
-            "forecasting": False,
+            "forecasting": True,
         }
-        assert eligible_agents == {"kpi_trend", "anomaly_detection"}
+        assert eligible_agents == {"kpi_trend", "anomaly_detection", "forecasting"}
         return OrchestrationPlan(
             selected_agents=["kpi_trend", "forecasting"],
             decisions=[
@@ -663,14 +768,14 @@ def test_compound_plan_remains_inside_deterministic_capability_gates() -> None:
 
     plan = asyncio.run(OrchestratorAgent(planner=propose).run(prepared))
 
-    assert plan.selected_agents == ["kpi_trend"]
+    assert plan.selected_agents == ["kpi_trend", "forecasting"]
     forecast = next(
         decision
         for decision in plan.decisions
         if decision.agent == "forecasting"
     )
-    assert forecast.selected is False
-    assert "does not support" in forecast.reason
+    assert forecast.selected is True
+    assert "deterministic" in forecast.reason
 
 
 def test_compound_plan_always_selects_eligible_forecasting() -> None:

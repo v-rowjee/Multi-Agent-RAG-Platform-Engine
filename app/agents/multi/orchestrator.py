@@ -23,7 +23,6 @@ from app.schemas.orchestration import (
 )
 
 MIN_TREND_PERIODS = 2
-MIN_FORECAST_PERIODS = 4
 MAX_ORCHESTRATION_COLUMNS = 50
 MAX_ORCHESTRATION_SAMPLE_VALUES = 5
 MAX_ORCHESTRATION_SAMPLE_LENGTH = 80
@@ -101,9 +100,6 @@ def detect_analysis_capabilities(
     has_numeric_measure = bool(numeric_columns)
     has_temporal_column = bool(temporal_columns)
     enough_trend_periods = unique_periods == 0 or unique_periods >= MIN_TREND_PERIODS
-    enough_forecast_periods = (
-        unique_periods == 0 or unique_periods >= MIN_FORECAST_PERIODS
-    )
     row_count = _as_positive_int(profile.get("row_count"))
     enough_anomaly_rows = row_count == 0 or row_count >= 8
 
@@ -113,12 +109,11 @@ def detect_analysis_capabilities(
             has_numeric_measure and has_temporal_column and enough_trend_periods
         ),
         "supports_anomalies": has_numeric_measure and enough_anomaly_rows,
-        "supports_forecasting": (
-            has_numeric_measure
-            and has_temporal_column
-            and enough_forecast_periods
-        ),
-        "has_temporal_data": has_temporal_column and enough_trend_periods,
+        # Forecasting is mandatory for datasets with a temporal dimension and a
+        # numeric measure.  The specialist handles short series with a safe
+        # deterministic fallback instead of being omitted by routing.
+        "supports_forecasting": has_numeric_measure and has_temporal_column,
+        "has_temporal_data": has_temporal_column,
     }
 
 

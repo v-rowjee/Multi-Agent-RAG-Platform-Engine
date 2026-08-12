@@ -463,6 +463,11 @@ def _validate(
             "executive_summary": summary,
             "key_insights": insights,
             "recommendations": recommendations[:MAX_RECOMMENDATIONS],
+            # Limitations are operational facts from data preparation and the
+            # specialist outputs.  The synthesis prompt receives compact
+            # previews, so model-authored limitations could otherwise mistake
+            # those previews for a restriction of the full analysis.
+            "limitations": _limitations(prepared, kpi, anomaly, forecast),
         }
     )
 

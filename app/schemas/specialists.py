@@ -24,6 +24,9 @@ class KPIDefinition(StrictModel):
     trend_text: str | None = None
     measure: str
     aggregation: str
+    numerator_aggregation: str | None = None
+    denominator_measure: str | None = None
+    denominator_aggregation: str | None = None
     dimension: str | None = None
     dimension_value: str | int | float | bool | None = None
 

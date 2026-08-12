@@ -20,7 +20,7 @@ messages:
     system:
       role: You resolve one KPI request into a pandas expression.
       task: Return the KPI title, exactly one scalar pandas expression using the dataframe variable df, a numeric fallback value, and a concise trend indicator. The application will validate and execute the expression against the latest reporting period. Its fallback value must be used if that query cannot be calculated.
-      allowed_query_shapes: 'df["measure"].sum() or df.loc[df["dimension"] == "value", "measure"].sum()'
+      allowed_query_shapes: 'df["measure"].sum(), df.loc[df["dimension"] == "value", "measure"].sum(), or a ratio of two such aggregations such as df["profit_gbp"].sum() / df["transaction_id"].count()'
       allowed_aggregations[7]: sum,mean,median,count,nunique,min,max
       restrictions[6]: "use only supplied columns","do not change the KPI title","provide a numeric fallback value","no imports or arbitrary Python","do not invent causes for the trend","return JSON only"
       output:

@@ -1,6 +1,7 @@
 """Isolation Forest anomaly specialist with grounded business interpretation."""
 from __future__ import annotations
 
+import math
 import re
 from typing import Any, Literal
 
@@ -32,6 +33,8 @@ MIN_ISOLATION_SAMPLES = 8
 MAX_GROUP_CARDINALITY = 20
 MAX_ANALYSES = 3
 MAX_ANOMALIES = 10
+ANOMALY_CONTAMINATION = 0.25
+AUTO_ANOMALY_SCORE_THRESHOLD = 0.5
 SUPPORTED_METHODS = {"isolation_forest"}
 SUPPORTED_AGGREGATIONS = {"sum", "mean", "count"}
 SUPPORTED_GRANULARITIES = {"day", "week", "month", "quarter", "year"}
@@ -174,9 +177,27 @@ def _series(df: pd.DataFrame, item: AnomalyDefinition) -> list[tuple[str | None,
     return output
 
 
-def _severity(rank: int) -> Literal["informational", "warning", "critical"]:
-    """Rank the most isolated observation as critical, without inventing a scale."""
-    return "critical" if rank == 0 else "warning" if rank < 3 else "informational"
+def _classify_severities(
+    anomalies: list[AnomalyResult],
+) -> list[AnomalyResult]:
+    """Reserve critical for the strongest displayed anomalies.
+
+    An Isolation Forest flag is not automatically a critical business event.
+    Classifying the final dashboard selection together produces a useful
+    critical-versus-warning split instead of making each analysis' single
+    strongest observation critical.
+    """
+    ranked = sorted(
+        anomalies,
+        key=lambda result: -(result.anomaly_score or 0),
+    )
+    critical_count = max(1, math.ceil(len(ranked) * 0.2)) if ranked else 0
+    return [
+        item.model_copy(
+            update={"severity": "critical" if rank < critical_count else "warning"}
+        )
+        for rank, item in enumerate(ranked)
+    ]
 
 
 def _result(item: AnomalyDefinition, period: Any, observed: float, expected: float | None, score: float, severity: Literal["informational", "warning", "critical"], group: str | None = None) -> AnomalyResult:
@@ -191,7 +212,10 @@ def _detect(item: AnomalyDefinition, values: pd.Series, group: str | None = None
     if len(numeric) < MIN_ISOLATION_SAMPLES or numeric.nunique() < 2:
         return []
     detector = IsolationForest(
-        contamination="auto",
+        # A quarter of observations is a deliberately modest sensitivity floor.
+        # Preserve the automatic threshold below as well, so this policy can add
+        # near-outliers without ever hiding observations previously detected.
+        contamination=ANOMALY_CONTAMINATION,
         n_estimators=100,
         random_state=42,
     )
@@ -204,12 +228,15 @@ def _detect(item: AnomalyDefinition, values: pd.Series, group: str | None = None
         for index, value, prediction, score in zip(
             numeric.index, numeric, predictions, scores, strict=True
         )
-        if prediction == -1
+        # With ``contamination="auto"``, scikit-learn uses an offset of -0.5;
+        # our score is the negated raw score, so values above 0.5 were also
+        # anomalies under the previous policy. Keep their detection intact.
+        if prediction == -1 or score > AUTO_ANOMALY_SCORE_THRESHOLD
     ]
     ranked = sorted(flagged, key=lambda result: result[2], reverse=True)
     return [
-        _result(item, period, observed, expected, score, _severity(rank), group)
-        for rank, (period, observed, score) in enumerate(ranked)
+        _result(item, period, observed, expected, score, "warning", group)
+        for period, observed, score in ranked
     ]
 
 
@@ -329,8 +356,8 @@ class AnomalyDetectionAgent:
         for item in analyses:
             for group, values in _series(df, item):
                 anomalies.extend(_detect(item, values, group))
-        anomalies.sort(key=lambda result: (result.severity != "critical", result.severity != "warning", -(result.anomaly_score or 0)))
-        anomalies = anomalies[:MAX_ANOMALIES]
+        anomalies.sort(key=lambda result: -(result.anomaly_score or 0))
+        anomalies = _classify_severities(anomalies[:MAX_ANOMALIES])
         if anomalies:
             try:
                 interpretations = await _request_interpretations(

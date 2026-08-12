@@ -9,6 +9,6 @@ messages:
         fields[6]: status,executive_summary,key_insights,recommendations,limitations,warnings
         executive_summary: Write 60 to 100 words covering scope latest KPI movement an important historical trend or anomaly and the three-point outlook when supplied.
         recommendations: Produce three to five concise recommended actions.
-      grounding_rules[4]: "every insight and action must reference supplied evidence source_type and source_id","use only supplied IDs and numbers","do not calculate values","do not invent context or claim causation"
+      grounding_rules[5]: "every insight and action must reference supplied evidence source_type and source_id","use only supplied IDs and numbers","do not calculate values","do not invent context or claim causation","limitations must only restate supplied data-quality model or coverage limitations; never treat a compact evidence preview as an analysis limitation"
     user:
       input: "{{ payload }}"

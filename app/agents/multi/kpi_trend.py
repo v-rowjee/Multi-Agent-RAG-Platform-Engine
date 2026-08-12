@@ -5,6 +5,7 @@ import asyncio
 import ast
 import math
 import re
+from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
@@ -52,6 +53,16 @@ PANDAS_AGGREGATIONS = {
 class KPITrendError(RuntimeError):
     pass
 
+
+@dataclass(frozen=True)
+class ParsedKPIQuery:
+    measure: str
+    aggregation: str
+    numerator_aggregation: str | None = None
+    dimension: str | None = None
+    dimension_value: str | int | float | bool | None = None
+    denominator_measure: str | None = None
+    denominator_aggregation: str | None = None
 
 
 def _columns_metadata(prepared: dict[str, Any]) -> list[dict[str, Any]]:
@@ -198,15 +209,10 @@ def _filtered_query_source(
     return measure, dimension, value_node.value
 
 
-def _parse_pandas_query(
-    query: str,
+def _parse_aggregation_call(
+    expression: ast.AST,
     df: pd.DataFrame,
 ) -> tuple[str, str, str | None, str | int | float | bool | None] | None:
-    """Validate the small, non-executable pandas expression language we support."""
-    try:
-        expression = ast.parse(query, mode="eval").body
-    except (SyntaxError, TypeError):
-        return None
     if not (
         isinstance(expression, ast.Call)
         and not expression.args
@@ -229,6 +235,55 @@ def _parse_pandas_query(
     if aggregation not in {"count", "distinct_count"} and not _is_numeric(df, measure):
         return None
     return measure, aggregation, dimension, dimension_value
+
+
+def _parse_kpi_query(query: str, df: pd.DataFrame) -> ParsedKPIQuery | None:
+    """Parse a safe scalar aggregation or ratio of two scalar aggregations."""
+    try:
+        expression = ast.parse(query, mode="eval").body
+    except (SyntaxError, TypeError):
+        return None
+    if isinstance(expression, ast.BinOp) and isinstance(expression.op, ast.Div):
+        numerator = _parse_aggregation_call(expression.left, df)
+        denominator = _parse_aggregation_call(expression.right, df)
+        if numerator is None or denominator is None:
+            return None
+        measure, aggregation, dimension, dimension_value = numerator
+        denominator_measure, denominator_aggregation, denominator_dimension, denominator_value = denominator
+        # A ratio must use precisely the same optional filter on both operands;
+        # otherwise its displayed numerator and denominator would have different scopes.
+        if (dimension, dimension_value) != (denominator_dimension, denominator_value):
+            return None
+        return ParsedKPIQuery(
+            measure=measure,
+            aggregation="ratio",
+            numerator_aggregation=aggregation,
+            dimension=dimension,
+            dimension_value=dimension_value,
+            denominator_measure=denominator_measure,
+            denominator_aggregation=denominator_aggregation,
+        )
+    parsed = _parse_aggregation_call(expression, df)
+    if parsed is None:
+        return None
+    measure, aggregation, dimension, dimension_value = parsed
+    return ParsedKPIQuery(
+        measure=measure,
+        aggregation=aggregation,
+        dimension=dimension,
+        dimension_value=dimension_value,
+    )
+
+
+def _parse_pandas_query(
+    query: str,
+    df: pd.DataFrame,
+) -> tuple[str, str, str | None, str | int | float | bool | None] | None:
+    """Validate the supported expression language, preserving the legacy tuple API."""
+    parsed = _parse_kpi_query(query, df)
+    if parsed is None:
+        return None
+    return parsed.measure, parsed.aggregation, parsed.dimension, parsed.dimension_value
 
 
 def _fallback_plan(
@@ -267,7 +322,7 @@ def _valid_plan(
     trends: list[TrendDefinition] = []
     used: set[str] = set()
     for item in kpi_definitions[:MAX_KPIS]:
-        parsed = _parse_pandas_query(item.query, df)
+        parsed = _parse_kpi_query(item.query, df)
         if item.id in used:
             warnings.append(f"Rejected duplicate KPI definition `{item.id}`."); continue
         if parsed is None:
@@ -278,7 +333,10 @@ def _valid_plan(
             used.add(item.id)
             kpis.append(item.model_copy(update={"query_valid": False}))
             continue
-        measure, aggregation, dimension, dimension_value = parsed
+        measure = parsed.measure
+        aggregation = parsed.aggregation
+        dimension = parsed.dimension
+        dimension_value = parsed.dimension_value
         if dimension and df[dimension].nunique(dropna=True) > MAX_TREND_SERIES:
             warnings.append(
                 f"Pandas query for KPI `{item.id}` has a high-cardinality "
@@ -294,6 +352,9 @@ def _valid_plan(
                 "aggregation": aggregation,
                 "dimension": dimension,
                 "dimension_value": dimension_value,
+                "numerator_aggregation": parsed.numerator_aggregation,
+                "denominator_measure": parsed.denominator_measure,
+                "denominator_aggregation": parsed.denominator_aggregation,
             }
         )
         used.add(item.id); kpis.append(item)
@@ -429,6 +490,21 @@ def _aggregate(series: pd.Series, aggregation: str) -> float | int | None:
     return round(value, 6) if math.isfinite(value) else None
 
 
+def _calculate_value(source: pd.DataFrame, item: KPIDefinition) -> float | int | None:
+    """Calculate a validated KPI without evaluating model-provided Python."""
+    aggregation = item.numerator_aggregation or item.aggregation
+    numerator = _aggregate(source[item.measure], aggregation)
+    if numerator is None or item.denominator_measure is None:
+        return numerator
+    denominator = _aggregate(
+        source[item.denominator_measure], item.denominator_aggregation or "count"
+    )
+    if denominator in (None, 0):
+        return None
+    value = float(numerator) / float(denominator)
+    return round(value, 6) if math.isfinite(value) else None
+
+
 def _calculate_kpis(
     df: pd.DataFrame,
     definitions: list[KPIDefinition],
@@ -472,16 +548,24 @@ def _calculate_kpis(
         baseline_change_percent: float | None = None
         value: float | int | None = None
         if date_column:
-            data = source[[date_column, item.measure]].copy()
+            measures = [date_column, item.measure]
+            if item.denominator_measure:
+                measures.append(item.denominator_measure)
+            data = source[list(dict.fromkeys(measures))].copy()
             data[date_column] = pd.to_datetime(data[date_column], errors="coerce")
             data = data.dropna(subset=[date_column])
             if not data.empty:
                 data["_period"] = data[date_column].dt.to_period(
                     _frequency(granularity)
                 )
+                calculation_columns = [item.measure]
+                if item.denominator_measure:
+                    calculation_columns.append(item.denominator_measure)
                 grouped = (
-                    data.groupby("_period", observed=True)[item.measure]
-                    .apply(lambda series: _aggregate(series, item.aggregation))
+                    data.groupby("_period", observed=True)[
+                        list(dict.fromkeys(calculation_columns))
+                    ]
+                    .apply(lambda period_data: _calculate_value(period_data, item))
                     .dropna()
                     .sort_index()
                 )
@@ -516,7 +600,7 @@ def _calculate_kpis(
                     elif current_number == 0:
                         change_percent = 0.0
         if value is None:
-            value = _aggregate(source[item.measure], item.aggregation)
+            value = _calculate_value(source, item)
         if value is None and item.fallback_value is not None:
             warnings.append(
                 f"Pandas could not calculate KPI `{item.id}`; its LLM fallback value was used."

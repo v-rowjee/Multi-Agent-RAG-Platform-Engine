@@ -33,7 +33,6 @@ from app.services.data.series import (
 
 SUPPORTED_FORMULAS = {"quantity_times_unit_price", "gross_revenue_minus_discount"}
 FORMULA_SOURCE_COLUMNS = {"quantity_times_unit_price": ("quantity", "unit_price"), "gross_revenue_minus_discount": ("gross_revenue", "discount")}
-MIN_FORECAST_PERIODS = 4
 MIN_TREND_PERIODS = 2
 MIN_ANOMALY_OBSERVATIONS = 8
 
@@ -258,17 +257,14 @@ def _deterministic_plan(
             supports_trends=bool(
                 date_column and primary_measures and usable_periods >= MIN_TREND_PERIODS
             ),
-            supports_forecasting=bool(
-                date_column
-                and primary_measures
-                and usable_periods >= MIN_FORECAST_PERIODS
-            ),
+            # A detected temporal dimension and numeric measure always enter the
+            # forecasting branch.  The forecasting specialist selects a safe
+            # short-history fallback where Chronos-2 has too little context.
+            supports_forecasting=bool(date_column and primary_measures),
             supports_anomalies=bool(
                 primary_measures and profile.row_count >= MIN_ANOMALY_OBSERVATIONS
             ),
-            has_temporal_data=bool(
-                date_column and usable_periods >= MIN_TREND_PERIODS
-            ),
+            has_temporal_data=bool(date_column),
         ),
         limitations=limitations,
     )
@@ -474,13 +470,13 @@ def _downgrade_capabilities(plan: PreparationPlan, profile: DatasetProfile, warn
     if flags.supports_trends and not (has_date and has_measure and usable_periods >= MIN_TREND_PERIODS):
         warnings.append("Trend analysis disabled because date or numeric measure coverage is insufficient.")
         flags.supports_trends = False
-    if flags.supports_forecasting and not (has_date and has_measure and usable_periods >= MIN_FORECAST_PERIODS):
-        warnings.append("Forecasting disabled because too few usable time periods exist.")
+    if flags.supports_forecasting and not (has_date and has_measure):
+        warnings.append("Forecasting disabled because a temporal column or numeric measure is unavailable.")
         flags.supports_forecasting = False
     if flags.supports_anomalies and not (has_measure and rows >= MIN_ANOMALY_OBSERVATIONS):
         warnings.append("Anomaly analysis disabled because there are insufficient observations.")
         flags.supports_anomalies = False
-    flags.has_temporal_data = bool(has_date and usable_periods >= MIN_TREND_PERIODS)
+    flags.has_temporal_data = has_date
     return flags
 
 def _usable_period_count(profile: DatasetProfile, date_column: str | None) -> int:
@@ -536,14 +532,12 @@ def _reconcile_temporal_capabilities(
         and prepared[column].notna().any()
     ]
     has_measure = bool(measures)
-    has_temporal_data = period_count >= MIN_TREND_PERIODS
+    has_temporal_data = period_count >= 1
 
     plan.capability_flags.has_temporal_data = has_temporal_data
     plan.capability_flags.supports_kpis = has_measure
     plan.capability_flags.supports_trends = has_measure and has_temporal_data
-    plan.capability_flags.supports_forecasting = (
-        has_measure and period_count >= MIN_FORECAST_PERIODS
-    )
+    plan.capability_flags.supports_forecasting = has_measure and has_temporal_data
     plan.capability_flags.supports_anomalies = (
         has_measure and len(prepared) >= MIN_ANOMALY_OBSERVATIONS
     )

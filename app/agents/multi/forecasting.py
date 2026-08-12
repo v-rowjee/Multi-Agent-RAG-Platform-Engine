@@ -20,15 +20,16 @@ from app.schemas.specialists import (
 from app.services.data.series import (
     is_numeric_measure,
     period_frequency,
+    ranked_measures,
     select_primary_series,
     selected_date_column,
     selected_granularity,
 )
 from app.services.forecasting.service import forecasting_service
 
-# This matches data preparation's capability gate.  Short histories are still
-# labelled by the fallback model, while longer series can use Chronos-2.
-MIN_FORECAST_PERIODS = 4
+# Chronos-2 requires a meaningful history. Short temporal datasets still receive
+# a deterministic forecast so routing never suppresses a detected time series.
+MIN_CHRONOS_PERIODS = 4
 FORECAST_HORIZON_FRACTION = 0.25
 SUPPORTED_AGGREGATIONS = {"sum", "mean", "count"}
 SUPPORTED_GRANULARITIES = {"day", "week", "month", "quarter", "year"}
@@ -59,14 +60,11 @@ def _forecast_horizon(period_count: int) -> int:
 
 
 def _supports(prepared: dict[str, Any], df: pd.DataFrame) -> str | None:
-    flags = prepared.get("capability_flags") or {}
-    if flags.get("supports_forecasting") is not True: return "Forecasting is not supported by the prepared dataset capability flags."
-    if flags.get("has_temporal_data") is False: return "Forecasting requires temporal data."
     date = selected_date_column(prepared, df)
     if not isinstance(date, str) or date not in df: return "Forecasting requires a prepared date column."
-    if not any(_numeric(df, str(x)) for x in prepared.get("primary_measures") or []) and not any(_numeric(df, str(x)) for x in prepared.get("time_series_candidates") or []): return "Forecasting requires a numeric measure."
+    if not ranked_measures(prepared, df): return "Forecasting requires a numeric measure."
     periods = pd.to_datetime(df[date], errors="coerce").dropna().dt.to_period(_frequency(_granularity(prepared))).nunique()
-    return None if periods >= MIN_FORECAST_PERIODS else f"Forecasting requires at least {MIN_FORECAST_PERIODS} historical periods."
+    return None if periods >= 1 else "Forecasting requires at least one valid historical period."
 
 
 def _fallback(prepared: dict[str, Any], df: pd.DataFrame) -> ForecastPlan:
@@ -111,7 +109,6 @@ def _prepare(df: pd.DataFrame, item: ForecastDefinition) -> pd.Series:
     # Small internal gaps are linearly interpolated; remaining edge/long gaps are rejected.
     regular = regular.interpolate(limit=2, limit_area="inside")
     if regular.isna().any(): raise ForecastingError("The selected time series has unfillable gaps.")
-    if len(regular) < MIN_FORECAST_PERIODS: raise ForecastingError(f"The selected series has fewer than {MIN_FORECAST_PERIODS} usable periods.")
     return regular
 
 
@@ -129,7 +126,11 @@ def _fallback_forecast(
         "year": 0,
     }[granularity]
     non_negative = bool((values >= 0).all())
-    if seasonal_period and len(values) >= seasonal_period * 2:
+    if len(values) == 1:
+        predictions = [float(values[-1])] * horizon
+        residuals = np.asarray([], dtype=float)
+        model = "naive_last_value"
+    elif seasonal_period and len(values) >= seasonal_period * 2:
         predictions = [
             float(values[-seasonal_period + (index % seasonal_period)])
             for index in range(horizon)
@@ -188,6 +189,10 @@ class ForecastingAgent:
         historical = [HistoricalPoint(period=str(period), value=round(float(value), 6)) for period, value in series.items()]
         confidence_level: float | None
         try:
+            if len(series) < MIN_CHRONOS_PERIODS:
+                raise ForecastingError(
+                    f"Chronos-2 requires at least {MIN_CHRONOS_PERIODS} historical periods."
+                )
             response = await forecasting_service.forecast(series, definition.horizon)
         except Exception as exc:
             model, values, lower_bounds, upper_bounds = _fallback_forecast(

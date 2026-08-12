@@ -426,6 +426,31 @@ def _validated_plan(
             MAX_DASHBOARD_KPIS,
         )
 
+    def select_trends() -> list[str]:
+        """Put the forecast target first so the timeline can render it."""
+        defaults = select(
+            plan.selected_trend_ids,
+            trends,
+            fallback.selected_trend_ids,
+            MAX_DASHBOARD_TRENDS,
+        )
+        forecast_target = forecast or {}
+        matching = [
+            str(item["id"])
+            for item in trends
+            if item.get("id")
+            and forecast_target.get("forecast")
+            and item.get("measure") == forecast_target.get("measure")
+            and item.get("aggregation") == forecast_target.get("aggregation")
+            and item.get("granularity") == forecast_target.get("granularity")
+        ]
+        valid = {str(item["id"]) for item in trends if item.get("id")}
+        return _dedupe_selected(
+            [*matching, *defaults],
+            valid,
+            MAX_DASHBOARD_TRENDS,
+        )
+
     sections: list[DashboardSection] = []
     seen_sections: set[str] = set()
     for section in plan.section_order:
@@ -435,12 +460,7 @@ def _validated_plan(
     return plan.model_copy(
         update={
             "selected_kpi_ids": select_kpis(),
-            "selected_trend_ids": select(
-                plan.selected_trend_ids,
-                trends,
-                fallback.selected_trend_ids,
-                MAX_DASHBOARD_TRENDS,
-            ),
+            "selected_trend_ids": select_trends(),
             "selected_anomaly_ids": select(
                 plan.selected_anomaly_ids,
                 anomalies,

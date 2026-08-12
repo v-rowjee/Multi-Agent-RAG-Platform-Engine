@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
+import numpy as np
 import pandas as pd
 
 from app.agents.multi import anomaly_detection as anomaly_module
@@ -11,6 +12,7 @@ from app.schemas.specialists import (
     AnomalyInterpretation,
     AnomalyInterpretationOutput,
     AnomalyPlan,
+    AnomalyResult,
 )
 
 
@@ -112,3 +114,48 @@ def test_interpretation_failure_keeps_detected_observations(monkeypatch) -> None
     assert execution_status == "fallback"
     assert all(item.business_interpretation for item in result.anomalies)
     assert any("deterministic fallback" in warning for warning in result.warnings)
+
+
+def test_displayed_anomalies_reserve_critical_for_strongest_fifth() -> None:
+    definition = AnomalyDefinition(
+        id="revenue_isolation_forest",
+        measure="revenue",
+        method="isolation_forest",
+    )
+    anomalies = [
+        AnomalyResult(
+            id=f"anomaly_{index}",
+            analysis_id=definition.id,
+            metric="revenue",
+            aggregation="sum",
+            observed_value=float(index),
+            anomaly_score=float(10 - index),
+            severity="warning",
+            method="isolation_forest",
+            evidence="Test anomaly.",
+        )
+        for index in range(5)
+    ]
+
+    classified = anomaly_module._classify_severities(anomalies)
+
+    assert [item.severity for item in classified] == [
+        "critical",
+        "warning",
+        "warning",
+        "warning",
+        "warning",
+    ]
+
+
+def test_anomaly_detection_uses_a_more_sensitive_quarter_contamination_floor() -> None:
+    values = pd.Series(np.random.default_rng(1).normal(100, 5, 100))
+    definition = AnomalyDefinition(
+        id="revenue_isolation_forest",
+        measure="revenue",
+        method="isolation_forest",
+    )
+
+    anomalies = anomaly_module._detect(definition, values)
+
+    assert len(anomalies) == 25
