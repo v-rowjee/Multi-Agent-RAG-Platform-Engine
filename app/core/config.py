@@ -18,7 +18,6 @@ ReasoningEffort = Literal["none", "low", "medium", "high"] | None
 CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
 AGENT_PROFILES_DIR = CONFIG_DIR
 GROQ_AGENT_CONFIG_PATH = CONFIG_DIR / "agents.groq.toml"
-SINGLE_AGENT_CONFIG_PATH = CONFIG_DIR / "agents.single.toml"
 RAG_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "rag.toml"
 
 # Load environment variables once
@@ -154,8 +153,18 @@ def get_cors_allowed_origins() -> tuple[str, ...]:
     return origins
 
 
-def _get_agent_policy(name: str, data: dict[str, Any]) -> AgentModelPolicy:
-    provider = _get_str(data, "provider").lower()
+def _get_agent_policy(
+    name: str,
+    data: dict[str, Any],
+    *,
+    default_provider: str,
+) -> AgentModelPolicy:
+    provider_value = data.get("provider", default_provider)
+    if not isinstance(provider_value, str) or not provider_value.strip():
+        raise RuntimeConfigurationError(
+            f"agents.{name}.provider must be a non-empty string"
+        )
+    provider = provider_value.strip().lower()
     if provider not in {"groq", "openrouter"}:
         raise RuntimeConfigurationError(f"agents.{name}.provider must be 'groq' or 'openrouter'")
 
@@ -210,6 +219,12 @@ def _load_agent_policies(
     required: set[str],
     label: str,
 ) -> dict[str, AgentModelPolicy]:
+    default_provider = _get_str(raw, "provider").lower()
+    if default_provider not in {"groq", "openrouter"}:
+        raise RuntimeConfigurationError(
+            "provider must be 'groq' or 'openrouter'"
+        )
+
     raw_agents = raw.get("agents", {})
     if not isinstance(raw_agents, dict):
         raise RuntimeConfigurationError(f"{label} 'agents' must be a TOML table")
@@ -224,7 +239,14 @@ def _load_agent_policies(
         raise RuntimeConfigurationError(
             f"{label} has unsupported entries: {', '.join(sorted(unexpected))}"
         )
-    return {name: _get_agent_policy(name, raw_agents[name]) for name in required}
+    return {
+        name: _get_agent_policy(
+            name,
+            raw_agents[name],
+            default_provider=default_provider,
+        )
+        for name in required
+    }
 
 
 def load_runtime_config(
@@ -240,7 +262,7 @@ def load_runtime_config(
 
     profile_path = profiles_dir / GROQ_AGENT_CONFIG_PATH.name
     profile_config = _load_toml(profile_path, label="Agent profile")
-    multi_agent_names = {
+    required_agent_names = {
         "data_preparation",
         "orchestrator",
         "kpi_trend",
@@ -248,23 +270,12 @@ def load_runtime_config(
         "dashboard_generation",
         "insight_synthesis",
         "chat",
+        "business_intelligence",
     }
-    single_agent_names = {"single_dashboard", "single_chat"}
     agents = _load_agent_policies(
         profile_config,
-        required=multi_agent_names,
+        required=required_agent_names,
         label="Agent profile",
-    )
-    single_config = _load_toml(
-        profiles_dir / SINGLE_AGENT_CONFIG_PATH.name,
-        label="Single-agent configuration",
-    )
-    agents.update(
-        _load_agent_policies(
-            single_config,
-            required=single_agent_names,
-            label="Single-agent configuration",
-        )
     )
     return RuntimeConfiguration(
         pipeline_mode=mode,  # type: ignore[arg-type]
@@ -437,7 +448,7 @@ def init_app() -> None:
     get_rag_config()
     validate_prompt_bundles()
     active_agents = (
-        ("single_dashboard", "single_chat")
+        ("business_intelligence",)
         if runtime.pipeline_mode == "single"
         else (
             "data_preparation",

@@ -1,14 +1,40 @@
 import asyncio
 
 import pytest
+from langchain_core.runnables import RunnableLambda
 
 from app.agents.multi import forecasting as forecasting_module
+from app.agents.single import business_intelligence as single_bi_module
 from app.core.model_policy import (
     multi_dashboard_model_usage,
     single_dashboard_model_usage,
 )
 from app.schemas.api import AgentModelUsage
 from app.schemas.specialists import ForecastingOutput
+
+
+def test_single_agent_creates_one_model_for_dashboard_and_chat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeModel(RunnableLambda[object, object]):
+        def __init__(self) -> None:
+            super().__init__(lambda _: "response")
+
+        def with_structured_output(self, *_: object, **__: object) -> RunnableLambda:
+            return RunnableLambda(lambda _: "response")
+
+    policy = object()
+    created_policies: list[object] = []
+    monkeypatch.setattr(single_bi_module, "agent_model_policy", lambda _: policy)
+    monkeypatch.setattr(
+        single_bi_module,
+        "create_chat_model",
+        lambda configured_policy: created_policies.append(configured_policy) or FakeModel(),
+    )
+
+    single_bi_module.BusinessIntelligenceAgent()._create_chains()
+
+    assert created_policies == [policy]
 
 
 def test_single_dashboard_usage_uses_the_configured_single_agent_model() -> None:

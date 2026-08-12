@@ -9,34 +9,25 @@ import pytest
 
 from app.agents.multi import dashboard_generation as dashboard_module
 from app.agents.multi import forecasting as forecasting_module
+from app.agents.multi import kpi_trend as kpi_trend_module
 from app.agents.multi import orchestrator as orchestrator_module
 from app.agents.multi.dashboard_generation import DashboardGenerationAgent
 from app.agents.multi.data_preparation import data_preparation_agent
 from app.agents.multi.forecasting import ForecastingAgent
 from app.agents.multi.insight_synthesis import _fallback as synthesis_fallback
-from app.agents.multi import kpi_trend as kpi_trend_module
 from app.agents.multi.kpi_trend import KPITrendAgent
-from app.agents.multi.orchestrator import (
-    OrchestratorAgent,
-    _request_plan,
-    build_orchestration_context,
-    detect_analysis_capabilities,
-    orchestrator_agent,
-)
+from app.agents.multi.orchestrator import (OrchestratorAgent, _request_plan,
+                                           build_orchestration_context,
+                                           detect_analysis_capabilities,
+                                           orchestrator_agent)
 from app.core.config import configured_agent_models
 from app.schemas.dashboard import DashboardLayoutPlan, SupportingChartSpec
 from app.schemas.orchestration import AgentDecision, OrchestrationPlan
-from app.schemas.specialists import (
-    KPIDefinition,
-    KPIRequest,
-    KPITrendPlan,
-    KPIValueDefinition,
-)
+from app.schemas.specialists import (KPIDefinition, KPIRequest, KPITrendPlan,
+                                     KPIValueDefinition)
 from app.services.data.cleaning import _generic_clean_csv
-from app.services.data.series import (
-    aggregation_for_measure,
-    infer_time_granularity,
-)
+from app.services.data.series import (aggregation_for_measure,
+                                      infer_time_granularity)
 
 
 def _rows(periods: int = 24) -> pd.DataFrame:
@@ -714,8 +705,7 @@ def test_deterministic_routing_and_active_model_defaults() -> None:
         "dashboard_generation": "openai/gpt-oss-20b",
         "insight_synthesis": "openai/gpt-oss-120b",
         "chat": "openai/gpt-oss-120b",
-        "single_dashboard": "openai/gpt-oss-120b",
-        "single_chat": "openai/gpt-oss-120b",
+        "business_intelligence": "openai/gpt-oss-120b",
     }
 
 

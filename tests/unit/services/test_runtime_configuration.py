@@ -42,7 +42,7 @@ def test_checked_in_configuration_uses_the_aligned_agent_models(
     assert config.agents["orchestrator"].reasoning_effort == "low"
     assert config.agents["insight_synthesis"].strict_json_schema is False
     assert config.agents["insight_synthesis"].reasoning_effort == "medium"
-    assert config.agents["insight_synthesis"].max_completion_tokens == 2000
+    assert config.agents["insight_synthesis"].max_completion_tokens == 2500
     assert config.agents["dashboard_generation"].strict_json_schema is False
     assert config.agents["dashboard_generation"].reasoning_effort == "low"
     assert config.agents["dashboard_generation"].max_completion_tokens == 1800
@@ -163,11 +163,6 @@ def test_invalid_agent_provider_and_model_are_rejected(
 ) -> None:
     monkeypatch.setenv("BI_PIPELINE_MODE", "multi")
     profile_path = tmp_path / "agents.groq.toml"
-    single_profile_path = tmp_path / "agents.single.toml"
-    single_profile_path.write_text(
-        (AGENT_PROFILES_DIR / "agents.single.toml").read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
     content = (AGENT_PROFILES_DIR / "agents.groq.toml").read_text(encoding="utf-8").replace(
         'provider = "groq"', 'provider = "unsupported"', 1
     )
@@ -184,6 +179,24 @@ def test_invalid_agent_provider_and_model_are_rejected(
     )
     with pytest.raises(RuntimeConfigurationError, match="model"):
         load_runtime_config(profiles_dir=tmp_path)
+
+
+def test_agent_provider_can_override_the_profile_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("BI_PIPELINE_MODE", "multi")
+    profile_path = tmp_path / "agents.groq.toml"
+    content = (AGENT_PROFILES_DIR / "agents.groq.toml").read_text(encoding="utf-8")
+    profile_path.write_text(
+        content.replace(
+            '[agents.chat]',
+            '[agents.chat]\nprovider = "openrouter"',
+        ),
+        encoding="utf-8",
+    )
+
+    assert load_runtime_config(profiles_dir=tmp_path).agents["chat"].provider == "openrouter"
 
 
 def test_prompt_bundles_validate_and_render_structured_toon() -> None:

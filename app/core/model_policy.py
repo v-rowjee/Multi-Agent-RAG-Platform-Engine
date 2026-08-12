@@ -78,7 +78,7 @@ def forecasting_model_usage(
 
 def single_dashboard_model_usage() -> list[ModelUsage]:
     """Return the configured model that generated a single-agent dashboard."""
-    policy = get_runtime_config().agents["single_dashboard"]
+    policy = get_runtime_config().agents["business_intelligence"]
     return [
         {
             "agent": "Business intelligence",
@@ -91,7 +91,7 @@ def single_dashboard_model_usage() -> list[ModelUsage]:
 
 def chat_model_usage(pipeline_mode: str) -> ModelUsage:
     """Return the configured model used to answer chat questions."""
-    policy_name = "single_chat" if pipeline_mode == "single" else "chat"
+    policy_name = "business_intelligence" if pipeline_mode == "single" else "chat"
     policy = get_runtime_config().agents[policy_name]
     return {
         "agent": "Chat assistant",

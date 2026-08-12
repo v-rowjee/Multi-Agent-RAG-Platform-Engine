@@ -17,12 +17,7 @@ from langchain_openai import ChatOpenAI
 from openai import AsyncOpenAI
 from pydantic import BaseModel, SecretStr, ValidationError
 
-from app.core.config import (
-    AgentModelPolicy,
-    AgentProvider,
-    get_runtime_config,
-)
-
+from app.core.config import AgentModelPolicy, AgentProvider, get_runtime_config
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 MAX_STRUCTURED_ATTEMPTS = 3
@@ -36,6 +31,11 @@ class ProviderConfigurationError(ValueError):
 
 class ProviderRequestError(RuntimeError):
     """A safe provider failure that does not expose prompts or credentials."""
+
+    provider: AgentProvider
+    model: str
+    category: str
+    status_code: int | None
 
     def __init__(
         self,
@@ -234,7 +234,7 @@ def validate_active_provider_credentials() -> None:
     """Fail at startup when an active LLM provider has no credential."""
     runtime = get_runtime_config()
     policy_names = (
-        ("single_dashboard", "single_chat")
+        ("business_intelligence",)
         if runtime.pipeline_mode == "single"
         else (
             "data_preparation",
@@ -246,7 +246,9 @@ def validate_active_provider_credentials() -> None:
             "chat",
         )
     )
-    providers = {runtime.agents[name].provider for name in policy_names}
+    providers: set[AgentProvider] = set()
+    for name in policy_names:
+        providers.add(runtime.agents[name].provider)
     for provider in sorted(providers):
         _PROVIDERS[provider].api_key()
     logger.info(

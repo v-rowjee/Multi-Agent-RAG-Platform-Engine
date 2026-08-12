@@ -286,10 +286,8 @@ class BusinessIntelligenceAgent:
         if self._dashboard_chain is not None:
             return
 
-        dashboard_policy = agent_model_policy("single_dashboard")
-        chat_policy = agent_model_policy("single_chat")
+        dashboard_policy = agent_model_policy("business_intelligence")
         llm = create_chat_model(dashboard_policy)
-        chat_llm = create_chat_model(chat_policy)
 
         self._dashboard_chain = RunnableLambda(
             lambda values: self._prompt_value(
@@ -307,7 +305,7 @@ class BusinessIntelligenceAgent:
                 "rag_chat",
                 values,
             )
-        ) | chat_llm | StrOutputParser()
+        ) | llm | StrOutputParser()
 
         self._profile_chat_chain = RunnableLambda(
             lambda values: self._prompt_value(
@@ -315,7 +313,7 @@ class BusinessIntelligenceAgent:
                 "profile_chat",
                 values,
             )
-        ) | chat_llm | StrOutputParser()
+        ) | llm | StrOutputParser()
 
     @staticmethod
     def _prompt_value(

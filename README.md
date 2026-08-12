@@ -61,10 +61,9 @@ BI_PIPELINE_MODE=multi
 Restart the backend after changing it. The two modes expose
 the same upload, dashboard, chat, and chat-history API contracts.
 
-The Groq multi-agent profile selects the provider, model, generation limits,
-and reasoning effort for every LLM invocation. The independent
-`config/agents.single.toml` file contains the single-dashboard and single-chat
-policies. Each LLM agent has one versioned
+The Groq agent profile selects the provider, model, generation limits, and
+reasoning effort for every LLM invocation, including the single-dashboard and
+single-chat policies. Each LLM agent has one versioned
 TOON bundle in `app/prompts/`; the backend validates the bundle at startup and
 serializes its structured system and user context as TOON before invocation.
 The permitted browser origins are read from `.env` at startup:
