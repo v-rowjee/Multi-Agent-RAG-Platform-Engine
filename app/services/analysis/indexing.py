@@ -13,6 +13,7 @@ from app.schemas.api import ApiMessage, DashboardResponse
 from app.services.analysis.dashboards import DashboardAssembler
 from app.services.analysis.files import DatasetFileService
 from app.services.analysis.models import BackgroundTaskScheduler, PipelineExecution
+from app.services.analysis.workspace_calculation_cache import WorkspaceCalculationCache
 from app.services.persistence.analysis import (
     AnalysisRepository,
     AnalysisSessionRecord,
@@ -40,6 +41,7 @@ class AnalysisExecutionPersistenceService:
         settings: Settings,
         files: DatasetFileService,
         dashboards: DashboardAssembler,
+        calculation_cache: WorkspaceCalculationCache | None = None,
         single_agent: Any | None = None,
     ) -> None:
         self.analysis = analysis
@@ -49,6 +51,7 @@ class AnalysisExecutionPersistenceService:
         self.settings = settings
         self.files = files
         self.dashboards = dashboards
+        self.calculation_cache = calculation_cache
         self.single_agent = single_agent
 
     def persist(
@@ -61,6 +64,14 @@ class AnalysisExecutionPersistenceService:
         background_tasks: BackgroundTaskScheduler | None = None,
     ) -> DashboardResponse:
         response = execution.response
+        if response.status != "failed" and self.calculation_cache is not None:
+            try:
+                self.calculation_cache.prime(session.id, datasets, contents)
+            except Exception:
+                logger.exception(
+                    "Workspace calculation cache prime failed session_id=%s",
+                    session.id,
+                )
         update_session = getattr(self.analysis, "update_session_status", None)
         if callable(update_session):
             update_session(session.id, rag_status="indexing")

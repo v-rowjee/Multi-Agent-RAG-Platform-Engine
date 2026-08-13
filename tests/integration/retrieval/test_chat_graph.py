@@ -181,6 +181,7 @@ def test_multi_chat_is_session_scoped_grounded_and_persisted() -> None:
 
     assert response.answer == "The revenue KPI is 120."
     assert response.grounding == "Retrieved dataset sources: `kpi_revenue`."
+    assert response.grounded is True
     assert response.agentMetadata.agent == "Chat assistant"
     assert response.agentMetadata.provider == "groq"
     assert response.agentMetadata.model == "openai/gpt-oss-120b"
@@ -253,7 +254,8 @@ def test_multi_chat_blocks_prompt_injection_before_retrieval() -> None:
     )
 
     assert "cannot follow requests" in response.answer
-    assert response.grounding == "No supporting dataset evidence was available."
+    assert response.grounding.startswith("General guidance only;")
+    assert response.grounded is False
     assert rag.calls == []
     assert agent.calls == 0
     assert [message.role for message in storage.messages] == ["user", "assistant"]
@@ -283,11 +285,12 @@ def test_multi_chat_rejects_unsupported_numeric_claims() -> None:
     response = service.chat(SESSION_ID, "What is the revenue KPI?", USER_ID)
 
     assert response.answer == INSUFFICIENT_CONTEXT_ANSWER
-    assert response.grounding == "No supporting dataset evidence was available."
+    assert response.grounding.startswith("General guidance only;")
+    assert response.grounded is False
     assert storage.messages[-1].sources == []
 
 
-def test_multi_chat_returns_insufficient_context_for_empty_retrieval() -> None:
+def test_multi_chat_returns_unverified_general_guidance_for_empty_retrieval() -> None:
     service, storage, rag, agent = _service(
         [],
         GroundedChatDraft(
@@ -299,11 +302,45 @@ def test_multi_chat_returns_insufficient_context_for_empty_retrieval() -> None:
 
     response = service.chat(SESSION_ID, "Who caused the change?", USER_ID)
 
-    assert response.answer == INSUFFICIENT_CONTEXT_ANSWER
-    assert response.grounding == "No supporting dataset evidence was available."
+    assert "I can't confirm that from the dataset context" in response.answer
+    assert response.grounding.startswith("General guidance only;")
+    assert response.grounded is False
     assert len(rag.calls) == 1
-    assert agent.calls == 1
+    assert agent.calls == 0
     assert [message.role for message in storage.messages] == ["user", "assistant"]
+
+
+def test_multi_chat_replaces_unhelpful_unverified_response_with_a_method() -> None:
+    documents = [
+        RetrievedDocument(
+            page_content="Revenue is a financial measure.",
+            metadata={"source_id": "unrelated"},
+            score=0.5,
+        )
+    ]
+    service, _, _, agent = _service(
+        documents,
+        GroundedChatDraft(
+            answer="unused",
+            source_ids=[],
+            insufficient_context=True,
+        ),
+    )
+    agent.draft = GroundedChatDraft(
+        answer=(
+            "I couldn't verify this against the uploaded dataset, but generally, "
+            "gross revenue for January 2025 is not provided in the available documents."
+        ),
+        source_ids=["not-a-source"],
+        insufficient_context=True,
+    )
+
+    response = service.chat(SESSION_ID, "What was gross revenue for January 2025?", USER_ID)
+
+    assert "not provided" not in response.answer.casefold()
+    assert "sum the gross-revenue or sales field" in response.answer
+    assert "I couldn't verify" not in response.answer
+    assert response.grounded is False
 
 
 def test_multi_chat_returns_retrieved_recommendations_when_generation_times_out(

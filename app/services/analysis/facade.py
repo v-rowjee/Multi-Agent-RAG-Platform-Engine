@@ -30,6 +30,7 @@ from app.services.analysis.models import BackgroundTaskScheduler, PipelineExecut
 from app.services.analysis.pipelines import AnalysisPipelineRunner
 from app.services.analysis.uploads import DatasetUploadService
 from app.services.analysis.workspaces import WorkspaceService
+from app.services.analysis.workspace_calculation_cache import WorkspaceCalculationCache
 from app.services.persistence.analysis import (
     AnalysisRepository,
     DatasetRecord,
@@ -114,6 +115,7 @@ class BusinessIntelligenceService:
         )
 
         self._file_service = file_service or DatasetFileService()
+        self._calculation_cache = WorkspaceCalculationCache(self._file_service)
         self._dashboard_assembler = dashboard_assembler or DashboardAssembler(
             settings=self.settings,
             files=self._file_service,
@@ -145,6 +147,7 @@ class BusinessIntelligenceService:
                 settings=self.settings,
                 files=self._file_service,
                 dashboards=self._dashboard_assembler,
+                calculation_cache=self._calculation_cache,
             )
         )
         chat_graph = chat_service or ChatGraph(
@@ -159,6 +162,7 @@ class BusinessIntelligenceService:
             chat_graph=chat_graph,
             settings=self.settings,
             files=self._file_service,
+            calculation_cache=self._calculation_cache,
         )
         self._legacy_contract_sessions: set[str] = set()
 
@@ -568,7 +572,8 @@ class BusinessIntelligenceService:
         query: str,
         datasets: list[DatasetRecord],
     ) -> str | None:
-        return self._chat_service.workspace_calculation_response(query, datasets)
+        session_id = datasets[0].session_id if datasets else ""
+        return self._chat_service.workspace_calculation_response(session_id, query, datasets)
 
     def _save_workflow_dashboard(
         self,

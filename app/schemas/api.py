@@ -112,6 +112,7 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     answer: str = Field(min_length=1)
     grounding: str = Field(min_length=1)
+    grounded: bool
     agentMetadata: AgentModelMetadata
 
 

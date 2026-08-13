@@ -21,8 +21,9 @@ _CHAT_AGENT_TIMEOUT_SECONDS = agent_model_policy("chat").timeout_seconds
 _MAX_HISTORY_MESSAGES = 6
 _MAX_HISTORY_CHARACTERS = 2_000
 INSUFFICIENT_CONTEXT_ANSWER = (
-    "The available analysis does not contain enough information to answer that "
-    "question."
+    "I couldn't verify this against the uploaded dataset, but generally, "
+    "review the relevant metric, time period, and comparison group before "
+    "drawing a conclusion."
 )
 
 BLOCKED_CHAT_ANSWER = (
@@ -43,6 +44,11 @@ CAUSAL_FALLBACK = (
     "caused it."
 )
 NUMBER_PATTERN = re.compile(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?%?(?!\w)")
+_UNHELPFUL_UNVERIFIED_PATTERN = re.compile(
+    r"\b(not (?:provided|available)|available documents|"
+    r"(?:do not|don't) have enough information|insufficient information)\b",
+    flags=re.IGNORECASE,
+)
 _BLOCKED_PATTERNS = tuple(
     re.compile(pattern, flags=re.IGNORECASE | re.DOTALL)
     for pattern in (
@@ -100,6 +106,28 @@ def _numbers(text: str) -> set[str]:
     }
 
 
+def _general_guidance_answer(query: str, answer: str) -> str:
+    """Prevent an unverified response from merely restating missing evidence."""
+    if answer.strip() and not _UNHELPFUL_UNVERIFIED_PATTERN.search(answer):
+        return answer
+
+    lowered = query.casefold()
+    if any(term in lowered for term in ("revenue", "sales", "turnover", "income")):
+        return (
+            "I can't confirm the exact figure from the dataset context I have. "
+            "To calculate it, filter the requested period and sum the gross-revenue or sales field."
+        )
+    if any(term in lowered for term in ("average", "mean", "median")):
+        return (
+            "I can't confirm the exact figure from the dataset context I have. "
+            "Filter the relevant records first, then calculate the requested average."
+        )
+    return (
+        "I can't confirm that from the dataset context I have. Start by identifying "
+        "the relevant metric, period, and comparison group, then compare the matching records."
+    )
+
+
 def _safe_history(history: list[dict[str, str]]) -> list[dict[str, str]]:
     output: list[dict[str, str]] = []
     used_characters = 0
@@ -138,7 +166,7 @@ def _ground_draft(
 ) -> GroundedChatDraft:
     if draft.insufficient_context or not documents:
         return GroundedChatDraft(
-            answer=draft.answer or INSUFFICIENT_CONTEXT_ANSWER,
+            answer=_general_guidance_answer(query, draft.answer),
             source_ids=[],
             insufficient_context=True,
         )
@@ -146,7 +174,7 @@ def _ground_draft(
     source_ids = _ordered_valid_source_ids(draft.source_ids, documents)
     if not source_ids:
         return GroundedChatDraft(
-            answer=INSUFFICIENT_CONTEXT_ANSWER,
+            answer=_general_guidance_answer(query, draft.answer),
             source_ids=[],
             insufficient_context=True,
         )
@@ -263,6 +291,19 @@ def build_chat_graph(rag: Any | None = None, agent: Any | None = None):
             "reranked_documents": (reranked or candidates)[:_CHAT_SEARCH_LIMIT],
         }
 
+    def route_retrieval(state: dict[str, Any]) -> str:
+        return "general" if not state.get("retrieved_documents") else "rerank"
+
+    def general_node(state: dict[str, Any]) -> dict[str, Any]:
+        """Return immediately when the index has no relevant evidence."""
+        return {
+            "draft": GroundedChatDraft(
+                answer=_general_guidance_answer(state["query"], ""),
+                source_ids=[],
+                insufficient_context=True,
+            )
+        }
+
     def generation_node(state: dict[str, Any]) -> dict[str, Any]:
         documents = state.get("reranked_documents") or []
         try:
@@ -313,6 +354,7 @@ def build_chat_graph(rag: Any | None = None, agent: Any | None = None):
     graph.add_node("guardrail", guardrail)
     graph.add_node("blocked", lambda state: {})
     graph.add_node("retrieve", retrieve_node)
+    graph.add_node("general", general_node)
     graph.add_node("rerank", rerank_node)
     graph.add_node("generate", generation_node)
     graph.add_node("ground", grounding_node)
@@ -323,7 +365,12 @@ def build_chat_graph(rag: Any | None = None, agent: Any | None = None):
         {"blocked": "blocked", "retrieve": "retrieve"},
     )
     graph.add_edge("blocked", END)
-    graph.add_edge("retrieve", "rerank")
+    graph.add_conditional_edges(
+        "retrieve",
+        route_retrieval,
+        {"general": "general", "rerank": "rerank"},
+    )
+    graph.add_edge("general", "ground")
     graph.add_edge("rerank", "generate")
     graph.add_edge("generate", "ground")
     graph.add_edge("ground", END)

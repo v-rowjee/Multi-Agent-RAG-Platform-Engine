@@ -2,21 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
-import tempfile
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
 from app.core.config import Settings
 from app.core.exceptions import SessionNotFoundError
 from app.core.model_policy import chat_model_usage
 from app.schemas.api import BusinessIntelligenceAgentInput, ChatResponse
 from app.services.analysis.files import DatasetFileService
 from app.services.analysis.workspaces import WorkspaceService
+from app.services.analysis.workspace_calculation_cache import WorkspaceCalculationCache
 from app.services.persistence.analysis import DatasetRecord
 from app.services.persistence.messages import MessageRecord, MessageRepository
+from app.agents.multi.dataframe_query import plan_dataframe_query
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ class BusinessIntelligenceChatService:
         chat_graph: Any,
         settings: Settings,
         files: DatasetFileService,
+        calculation_cache: WorkspaceCalculationCache | None = None,
         single_agent: Any | None = None,
     ) -> None:
         self.workspaces = workspaces
@@ -41,6 +43,7 @@ class BusinessIntelligenceChatService:
         self.chat_graph = chat_graph
         self.settings = settings
         self.files = files
+        self.calculation_cache = calculation_cache or WorkspaceCalculationCache(files)
         self.single_agent = single_agent
 
     def chat(self, session_id: str, query: str, user_id: str) -> ChatResponse:
@@ -83,7 +86,7 @@ class BusinessIntelligenceChatService:
         history = self.chat_history(session_id)
         selected, _ = self.select_chat_datasets(query, datasets)
         scoped = [selected] if selected is not None else datasets
-        calculated = self.workspace_calculation_response(query, scoped)
+        calculated = self.workspace_calculation_response(session_id, query, scoped)
         retrieval_query = (
             f"In dataset `{selected.file_name}`, {query}"
             if selected is not None
@@ -100,6 +103,7 @@ class BusinessIntelligenceChatService:
                 session_id,
                 calculated,
                 [dataset.id for dataset in scoped],
+                grounded=True,
             )
         result = self.chat_graph.answer(
             session_id,
@@ -109,10 +113,17 @@ class BusinessIntelligenceChatService:
         response_text = result.draft.answer
         if result.draft.reasoning.strip():
             response_text += f"\n\n**Grounding:** {result.draft.reasoning.strip()}"
+        grounded = not result.draft.insufficient_context
+        if not grounded:
+            response_text += (
+                "\n\n**Grounding:** General guidance only; this response was not "
+                "verified against the uploaded dataset."
+            )
         return self.save_chat_response(
             session_id,
             response_text,
             result.draft.source_ids,
+            grounded=grounded,
         )
 
     @staticmethod
@@ -133,96 +144,45 @@ class BusinessIntelligenceChatService:
 
     def workspace_calculation_response(
         self,
+        session_id: str,
         query: str,
         datasets: list[DatasetRecord],
     ) -> str | None:
         if not datasets:
             return None
         try:
-            frames: list[pd.DataFrame] = []
-            canonical_columns: dict[str, str] = {}
-            for dataset in datasets:
-                frame = self.files.read_dataframe(
-                    dataset.storage_path,
-                    self.storage.download_file(dataset.storage_path),
-                )
-                rename: dict[Any, str] = {}
-                occupied = {str(column) for column in frame.columns}
-                for column in frame.columns:
-                    name = str(column)
-                    normalized = re.sub(
-                        r"[^a-z0-9]+",
-                        "_",
-                        name.casefold(),
-                    ).strip("_")
-                    canonical = canonical_columns.setdefault(
-                        normalized or name.casefold(),
-                        name,
-                    )
-                    if canonical != name and canonical not in occupied:
-                        rename[column] = canonical
-                if rename:
-                    frame = frame.rename(columns=rename)
-                frame["__source_dataset__"] = dataset.file_name
-                frames.append(frame)
-            if not frames:
+            snapshot = self.calculation_cache.get(session_id, datasets)
+            if snapshot is None:
+                # A restart or LRU eviction is safe: rebuild the snapshot from
+                # durable storage, then reuse it for subsequent chat messages.
+                contents = [
+                    self.storage.download_file(dataset.storage_path)
+                    for dataset in datasets
+                ]
+                self.calculation_cache.prime(session_id, datasets, contents)
+                snapshot = self.calculation_cache.get(session_id, datasets)
+            if snapshot is None:
                 return None
-            combined = pd.concat(frames, ignore_index=True, sort=False)
+            combined = snapshot.dataframe
+            profile = snapshot.profile
             if combined.empty:
                 return None
-            numeric_columns = [
-                str(column)
-                for column in combined.columns
-                if column != "__source_dataset__"
-                and pd.to_numeric(combined[column], errors="coerce").notna().any()
-            ]
-            dimensions = [
-                str(column)
-                for column in combined.columns
-                if str(column) not in numeric_columns
-            ]
-            date_field = next(
-                (
-                    str(column)
-                    for column in combined.columns
-                    if any(
-                        term in str(column).casefold()
-                        for term in ("date", "time", "year", "month", "period")
-                    )
-                ),
-                None,
+            plan = asyncio.run(
+                asyncio.wait_for(plan_dataframe_query(query, profile), timeout=8)
             )
-            profile = {
-                "summary": {
-                    "measures": numeric_columns,
-                    "dimensions": dimensions,
-                    "timeField": date_field,
-                }
-            }
-            query_type = self.retriever.route_query(query, profile)
-            if query_type not in {
-                "calculation",
-                "comparison",
-                "forecast",
-                "mixed",
-            }:
-                return None
-            with tempfile.TemporaryDirectory(prefix="bi_workspace_chat_") as directory:
-                combined_path = Path(directory) / "all_uploaded_datasets.csv"
-                combined.to_csv(combined_path, index=False)
-                agent_input = BusinessIntelligenceAgentInput(
-                    sessionId=datasets[0].session_id or datasets[0].id,
-                    datasetId=datasets[0].session_id or datasets[0].id,
-                    filePath=str(combined_path),
-                    fileName="all uploaded datasets",
-                    description=datasets[0].description,
-                )
-                evidence = self.retriever.calculate_evidence(
-                    agent_input=agent_input,
-                    query=query,
-                    query_type=query_type,
-                    profile=profile,
-                )
+            agent_input = BusinessIntelligenceAgentInput(
+                sessionId=datasets[0].session_id or datasets[0].id,
+                datasetId=datasets[0].session_id or datasets[0].id,
+                filePath="cached://workspace",
+                fileName="all uploaded datasets",
+                description=datasets[0].description,
+            )
+            evidence = self.retriever.execute_dataframe_plan(
+                agent_input=agent_input,
+                profile=profile,
+                plan=plan,
+                dataframe=combined,
+            )
             if evidence is None or not evidence.direct_answer:
                 return None
             file_names = ", ".join(
@@ -349,8 +309,10 @@ class BusinessIntelligenceChatService:
         session_id: str,
         response_text: str,
         source_ids: list[str],
+        grounded: bool | None = None,
     ) -> ChatResponse:
         answer, grounding = self.split_chat_response(response_text, source_ids)
+        is_grounded = bool(source_ids) if grounded is None else grounded
         self.messages.save_message(
             dataset_id=session_id,
             role="assistant",
@@ -360,6 +322,7 @@ class BusinessIntelligenceChatService:
         return ChatResponse(
             answer=answer,
             grounding=grounding,
+            grounded=is_grounded,
             agentMetadata=self.chat_model_metadata(),
         )
 
@@ -437,7 +400,7 @@ class BusinessIntelligenceChatService:
             "grounded": (
                 bool(grounded)
                 if grounded is not None
-                else message.role == "assistant"
+                else message.role == "assistant" and bool(message.sources)
             ),
             "createdAt": message.created_at,
         }

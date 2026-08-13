@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
 from app.agents.single.business_intelligence import BusinessIntelligenceAgent
 from app.rag.retrieval.retriever import DeterministicAnalytics, Retriever
 from app.schemas.api import BusinessIntelligenceAgentInput
+from app.schemas.specialists import DataframeQueryPlan
 
 def _analytics(tmp_path: Path) -> DeterministicAnalytics:
     data_path = tmp_path / "sales.csv"
@@ -105,6 +106,40 @@ def test_best_product_is_routed_to_deterministic_calculation() -> None:
     profile = {"summary": {"measures": ["Revenue"], "dimensions": ["Product"]}}
 
     assert Retriever().route_query("Which product performed best?", profile) == "calculation"
+
+
+def test_dataframe_plan_filters_a_month_and_compares_the_previous_period(
+    tmp_path: Path,
+) -> None:
+    data_path = tmp_path / "monthly_sales.csv"
+    pd.DataFrame(
+        {
+            "transaction_date": ["2024-12-15", "2025-01-04", "2025-01-22"],
+            "gross_revenue": [90, 100, 150],
+        }
+    ).to_csv(data_path, index=False)
+    analytics = DeterministicAnalytics(
+        BusinessIntelligenceAgentInput(
+            sessionId="monthly-session", filePath=str(data_path), fileName=data_path.name
+        ),
+        {"summary": {"measures": ["gross_revenue"], "dimensions": [], "timeField": "transaction_date"}},
+    )
+
+    result = analytics.execute_plan(
+        DataframeQueryPlan(
+            operation="sum",
+            measure="gross_revenue",
+            date_column="transaction_date",
+            year=2025,
+            month=1,
+            compare_previous_period=True,
+        )
+    )
+
+    assert result is not None
+    assert "**250.00**" in result.direct_answer
+    assert "increased from **90.00** in December 2024" in result.direct_answer
+    assert ".dt.month.eq(1)" in result.direct_answer
 
 
 def test_deterministic_answer_takes_priority_over_retrieved_context(tmp_path: Path) -> None:

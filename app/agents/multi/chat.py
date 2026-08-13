@@ -19,8 +19,9 @@ MAX_RETRIEVED_DOCUMENTS = _RAG_CONFIG.retrieval.chat_search_limit
 MAX_CONTEXT_CHARACTERS = _RAG_CONFIG.retrieval.max_context_chars
 MAX_DOCUMENT_CHARACTERS = _RAG_CONFIG.chunking.size
 INSUFFICIENT_CONTEXT_ANSWER = (
-    "The available analysis does not contain enough information to answer that "
-    "question."
+    "I couldn't verify this against the uploaded dataset, but generally, "
+    "review the relevant metric, time period, and comparison group before "
+    "drawing a conclusion."
 )
 FALLBACK_ANSWER = (
     "The analysis assistant could not produce a grounded answer from the "
@@ -120,11 +121,9 @@ class ChatAgent:
             len(documents),
         )
         if not documents:
-            logger.info("Insufficient context detected session_id=%s", session_id)
-            return GroundedChatDraft(
-                answer=INSUFFICIENT_CONTEXT_ANSWER,
-                source_ids=[],
-                insufficient_context=True,
+            logger.info(
+                "No dataset evidence retrieved; generating general guidance session_id=%s",
+                session_id,
             )
 
         try:

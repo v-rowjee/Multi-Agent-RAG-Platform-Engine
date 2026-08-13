@@ -84,7 +84,7 @@ def test_checked_in_rag_configuration() -> None:
     assert config.reranking.max_length == 384
     assert config.retrieval.vector_search_limit == 8
     assert config.retrieval.chat_search_limit == 4
-    assert config.retrieval.match_threshold == 0.25
+    assert config.retrieval.match_threshold == 0.12
     assert config.chunking.size == 800
     assert config.chunking.overlap == 100
 
@@ -101,7 +101,7 @@ def test_invalid_rag_configuration_is_rejected(tmp_path: Path) -> None:
         load_rag_config(config_path)
 
     config_path.write_text(
-        content.replace("match_threshold = 0.25", "match_threshold = 1.2"),
+        content.replace("match_threshold = 0.12", "match_threshold = 1.2"),
         encoding="utf-8",
     )
     with pytest.raises(RuntimeConfigurationError, match="retrieval.match_threshold"):
@@ -204,7 +204,8 @@ def test_prompt_bundles_validate_and_render_structured_toon() -> None:
         "multi/anomaly_detection.toon",
         "multi/chat.toon",
         "multi/dashboard_generation.toon",
-        "multi/data_preparation.toon",
+            "multi/data_preparation.toon",
+            "multi/dataframe_query.toon",
         "multi/insight_synthesis.toon",
         "multi/kpi_trend.toon",
         "multi/orchestrator.toon",
