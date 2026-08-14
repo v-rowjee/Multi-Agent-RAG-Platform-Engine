@@ -806,15 +806,9 @@ class BusinessIntelligenceAgent:
     def _date_field(df: pd.DataFrame) -> tuple[str | None, pd.Series | None]:
         for column in df.columns:
             name = str(column)
-            if not any(
-                word in name.lower()
-                for word in ("date", "time", "year", "month", "period")
-            ):
+            if pd.api.types.is_numeric_dtype(df[column]):
                 continue
-            source = df[column].astype(str)
-            if "year" in name.lower():
-                source = source + "-01-01"
-            parsed = pd.to_datetime(source, errors="coerce")
+            parsed = pd.to_datetime(df[column], errors="coerce")
             if len(parsed) and parsed.notna().mean() >= 0.6:
                 return name, parsed
         return None, None
@@ -881,29 +875,12 @@ class BusinessIntelligenceAgent:
         return None
 
     @staticmethod
-    def _average(name: str) -> bool:
-        return any(
-            word in name.lower()
-            for word in (
-                "price",
-                "rate",
-                "percent",
-                "margin",
-                "average",
-                "avg",
-                "score",
-            )
-        )
+    def _average(_name: str) -> bool:
+        """Use additive aggregation unless an analysis plan explicitly says otherwise."""
+        return False
 
     @staticmethod
-    def _format(name: str) -> str:
-        value = name.lower()
-        if any(word in value for word in ("percent", "rate", "margin")):
-            return "percentage"
-        if any(
-            word in value for word in ("price", "revenue", "cost", "profit", "amount")
-        ):
-            return "currency"
+    def _format(_name: str) -> str:
         return "number"
 
     @staticmethod

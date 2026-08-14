@@ -126,23 +126,9 @@ async def _request_layout(
     )
 
 
-def _dimension_score(value: str, cardinality: int) -> int:
-    lowered = value.lower()
-    priority = (
-        ("product_category", 100),
-        ("customer_segment", 95),
-        ("branch", 90),
-        ("sales_channel", 85),
-        ("campaign", 80),
-        ("membership", 75),
-        ("payment", 70),
-        ("product", 65),
-    )
-    semantic = max(
-        (score for token, score in priority if token in lowered),
-        default=50,
-    )
-    return semantic - max(0, cardinality - 12)
+def _dimension_score(_value: str, cardinality: int) -> int:
+    """Prefer compact, information-rich dimensions without domain assumptions."""
+    return -abs(cardinality - 8)
 
 
 def _ranked_dimensions(
@@ -516,10 +502,11 @@ def _format_kpi(
         return str(value)
     value_format = value_format_for_measure(measure, prepared)
     if value_format == "currency":
-        currency = (prepared.get("dataset_profile") or {}).get("currency")
+        currency = prepared.get("currency")
         return format_currency(float(value), currency)
-    if value_format == "percentage":
-        return f"{float(value):,.2f}%"
+    if value_format in {"percentage", "percentage_fraction"}:
+        display_value = float(value) * (100 if value_format == "percentage_fraction" else 1)
+        return f"{display_value:,.2f}%"
     return f"{float(value):,.2f}"
 
 
@@ -989,7 +976,7 @@ def _build_dashboard(
             "subtitle": None,
             "granularity": trend.get("granularity", "month"),
             "unit": (
-                (prepared.get("dataset_profile") or {}).get("currency")
+                prepared.get("currency")
                 or trend.get("measure")
             ),
             "valueFormat": value_format_for_measure(

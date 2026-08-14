@@ -20,7 +20,7 @@ from pydantic import BaseModel, SecretStr, ValidationError
 from app.core.config import AgentModelPolicy, AgentProvider, get_runtime_config
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-MAX_STRUCTURED_ATTEMPTS = 2
+MAX_STRUCTURED_ATTEMPTS = 1
 StructuredModel = TypeVar("StructuredModel", bound=BaseModel)
 logger = logging.getLogger(__name__)
 
@@ -402,19 +402,6 @@ def _assistant_content(response: Any) -> tuple[str, str | None]:
     raise InvalidProviderResponse("Provider response contained no assistant content.")
 
 
-def _is_retryable_provider_error(status_code: int | None) -> bool:
-    return status_code is None or status_code in {
-        408,
-        409,
-        425,
-        429,
-        500,
-        502,
-        503,
-        504,
-    }
-
-
 async def request_structured(
     *,
     policy: AgentModelPolicy,
@@ -432,119 +419,69 @@ async def request_structured(
             retry=False,
         )
 
-    last_error: Exception | None = None
-    for attempt in range(1, MAX_STRUCTURED_ATTEMPTS + 1):
-        started_at = perf_counter()
-        logger.info(
-            "LLM request started provider=%s model=%s schema=%s attempt=%s",
-            policy.provider,
-            policy.model,
-            schema_name,
-            attempt,
+    started_at = perf_counter()
+    logger.info(
+        "LLM request started provider=%s model=%s schema=%s attempt=1",
+        policy.provider,
+        policy.model,
+        schema_name,
+    )
+    try:
+        response = await _provider(policy).create_structured_completion(
+            policy=policy,
+            response_format=response_format,
+            messages=request_messages,
         )
-        try:
-            response = await _provider(policy).create_structured_completion(
-                policy=policy,
-                response_format=response_format,
-                messages=request_messages,
-            )
-        except ProviderConfigurationError:
-            raise
-        except Exception as error:
-            last_error = error
-            status_code = _status_code(error)
-            logger.warning(
-                "LLM request failed provider=%s model=%s schema=%s "
-                "attempt=%s error_type=%s status_code=%s latency_ms=%.1f",
-                policy.provider,
-                policy.model,
-                schema_name,
-                attempt,
-                type(error).__name__,
-                status_code,
-                (perf_counter() - started_at) * 1000,
-            )
-            strict_schema_rejected = (
-                status_code == 400
-                and response_format is not None
-                and response_format.get("type") == "json_schema"
-            )
-            if attempt < MAX_STRUCTURED_ATTEMPTS and strict_schema_rejected:
-                response_format = {"type": "json_object"}
-                request_messages = _schema_guided_messages(
-                    messages,
-                    response_model,
-                    retry=True,
-                )
-                logger.info(
-                    "LLM request retrying with JSON object mode provider=%s "
-                    "model=%s schema=%s",
-                    policy.provider,
-                    policy.model,
-                    schema_name,
-                )
-                continue
-            if (
-                attempt < MAX_STRUCTURED_ATTEMPTS
-                and _is_retryable_provider_error(status_code)
-            ):
-                continue
-            raise ProviderRequestError(
-                provider=policy.provider,
-                model=policy.model,
-                category="provider_error",
-                status_code=status_code,
-            ) from error
-
-        prompt_tokens, completion_tokens, total_tokens = _usage_values(response)
-        logger.info(
-            "LLM request completed provider=%s model=%s schema=%s attempt=%s "
-            "response_id=%s prompt_tokens=%s completion_tokens=%s "
-                "total_tokens=%s retry_count=%s latency_ms=%.1f",
+    except ProviderConfigurationError:
+        raise
+    except Exception as error:
+        status_code = _status_code(error)
+        logger.warning(
+            "LLM request failed provider=%s model=%s schema=%s "
+            "attempt=1 error_type=%s status_code=%s latency_ms=%.1f",
             policy.provider,
             policy.model,
             schema_name,
-            attempt,
+            type(error).__name__,
+            status_code,
+            (perf_counter() - started_at) * 1000,
+        )
+        raise ProviderRequestError(
+            provider=policy.provider,
+            model=policy.model,
+            category="provider_error",
+            status_code=status_code,
+        ) from error
+
+    prompt_tokens, completion_tokens, total_tokens = _usage_values(response)
+    logger.info(
+        "LLM request completed provider=%s model=%s schema=%s attempt=1 "
+        "response_id=%s prompt_tokens=%s completion_tokens=%s "
+        "total_tokens=%s retry_count=0 latency_ms=%.1f",
+        policy.provider,
+        policy.model,
+        schema_name,
+        getattr(response, "id", None),
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        (perf_counter() - started_at) * 1000,
+    )
+    try:
+        content, _ = _assistant_content(response)
+        return _parse_structured_content(content, response_model)
+    except (InvalidProviderResponse, ValidationError) as error:
+        logger.warning(
+            "LLM response validation failed provider=%s model=%s schema=%s "
+            "attempt=1 response_id=%s error_type=%s",
+            policy.provider,
+            policy.model,
+            schema_name,
             getattr(response, "id", None),
-            prompt_tokens,
-                completion_tokens,
-                total_tokens,
-                attempt - 1,
-                (perf_counter() - started_at) * 1000,
+            type(error).__name__,
         )
-        finish_reason: str | None = None
-        try:
-            content, finish_reason = _assistant_content(response)
-            return _parse_structured_content(content, response_model)
-        except (InvalidProviderResponse, ValidationError) as error:
-            last_error = error
-            logger.warning(
-                "LLM response validation failed provider=%s model=%s "
-                "schema=%s attempt=%s response_id=%s finish_reason=%s "
-                "error_type=%s",
-                policy.provider,
-                policy.model,
-                schema_name,
-                attempt,
-                getattr(response, "id", None),
-                finish_reason,
-                type(error).__name__,
-            )
-            if attempt < MAX_STRUCTURED_ATTEMPTS:
-                request_messages = _schema_guided_messages(
-                    messages,
-                    response_model,
-                    retry=True,
-                )
-                continue
-            raise ProviderRequestError(
-                provider=policy.provider,
-                model=policy.model,
-                category="invalid_response",
-            ) from error
-
-    raise ProviderRequestError(
-        provider=policy.provider,
-        model=policy.model,
-        category="provider_error",
-    ) from last_error
+        raise ProviderRequestError(
+            provider=policy.provider,
+            model=policy.model,
+            category="invalid_response",
+        ) from error

@@ -50,9 +50,6 @@ def _convert_numeric(df: pd.DataFrame) -> pd.DataFrame:
     for column in result.columns:
         if pd.api.types.is_numeric_dtype(result[column]):
             continue
-        name = str(column).lower()
-        if any(token in name for token in ("id", "code", "phone", "postcode", "zip")):
-            continue
         text = result[column].astype("string").str.strip()
         cleaned = text.str.replace(r"[$£€¥,%]", "", regex=True).str.replace(",", "", regex=False)
         numeric = pd.to_numeric(cleaned, errors="coerce")
@@ -62,57 +59,24 @@ def _convert_numeric(df: pd.DataFrame) -> pd.DataFrame:
             result[column] = numeric
     return result
 
-def _parse_dates_for_column(series: pd.Series, column: str) -> pd.Series:
-    name = column.lower()
-    if name == "year" or name.endswith("_year"):
-        years = pd.to_numeric(series, errors="coerce")
-        years = years.where(years.between(1900, 2200))
-        return pd.to_datetime(years.astype("Int64").astype("string"), format="%Y", errors="coerce")
+def _parse_dates_for_column(series: pd.Series, _column: str = "") -> pd.Series:
+    """Parse values as dates without relying on the column's business name."""
     return pd.to_datetime(series, errors="coerce")
 
-def _is_date_candidate_name(column: str) -> bool:
-    """Exclude calendar helper dimensions from destructive date coercion."""
-    name = column.lower()
-    helper_names = {
-        "day",
-        "day_name",
-        "day_of_week",
-        "month",
-        "month_name",
-        "quarter",
-        "week",
-        "year",
-    }
-    if name in helper_names or any(
-        name.endswith(suffix)
-        for suffix in (
-            "_day",
-            "_day_name",
-            "_month",
-            "_month_name",
-            "_quarter",
-            "_week",
-            "_year",
-        )
-    ):
-        return False
-    return (
-        name in {"date", "datetime", "time", "timestamp"}
-        or any(
-            token in name
-            for token in ("_date", "date_", "_datetime", "_timestamp", "_time")
-        )
-        or name.endswith("_period")
-    )
+
+def _date_parse_ratio(series: pd.Series) -> tuple[pd.Series, float]:
+    """Return parse evidence for textual values; numeric values remain numeric."""
+    if pd.api.types.is_numeric_dtype(series):
+        return pd.Series(pd.NaT, index=series.index), 0.0
+    parsed = _parse_dates_for_column(series)
+    non_null = series.notna()
+    ratio = float(parsed[non_null].notna().mean()) if non_null.any() else 0.0
+    return parsed, ratio
 
 def _convert_dates(df: pd.DataFrame) -> pd.DataFrame:
     result = df.copy()
     for column in result.columns:
-        if not _is_date_candidate_name(str(column)):
-            continue
-        parsed = _parse_dates_for_column(result[column], str(column))
-        non_null = result[column].notna()
-        ratio = float(parsed[non_null].notna().mean()) if non_null.any() else 0.0
+        parsed, ratio = _date_parse_ratio(result[column])
         if ratio >= DATE_CONVERSION_THRESHOLD and parsed.notna().any():
             result[column] = parsed
     return result
@@ -124,12 +88,9 @@ def _infer_column_type(series: pd.Series, column: str) -> str:
         return "boolean"
     if pd.api.types.is_numeric_dtype(series):
         return "numeric"
-    if _is_date_candidate_name(column):
-        parsed = _parse_dates_for_column(series, column)
-        non_null = series.notna()
-        ratio = float(parsed[non_null].notna().mean()) if non_null.any() else 0.0
-        if ratio >= DATE_CANDIDATE_THRESHOLD:
-            return "date"
+    _, ratio = _date_parse_ratio(series)
+    if ratio >= DATE_CANDIDATE_THRESHOLD:
+        return "date"
     unique = series.nunique(dropna=True)
     if len(series) and unique <= min(50, max(20, int(len(series) * 0.2))):
         return "categorical"

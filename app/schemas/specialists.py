@@ -31,23 +31,6 @@ class KPIDefinition(StrictModel):
     dimension_value: str | int | float | bool | None = None
 
 
-class KPIRequest(StrictModel):
-    """A user-facing KPI title and the focused request used to resolve it."""
-
-    id: str
-    title: str
-    prompt: str
-
-
-class KPIValueDefinition(StrictModel):
-    """LLM-defined KPI details, including its usable fallback."""
-
-    title: str = Field(min_length=1)
-    query: str = Field(min_length=1)
-    fallback_value: float | int
-    trend_kind: Literal["increase", "decrease", "note"]
-    trend_text: str = Field(min_length=1, max_length=120)
-
 class TrendDefinition(StrictModel):
     id: str
     title: str
@@ -58,7 +41,7 @@ class TrendDefinition(StrictModel):
     group_by: str | None = None
 
 class KPITrendPlan(StrictModel):
-    kpis: list[KPIRequest] = Field(default_factory=list, max_length=MAX_KPIS)
+    kpis: list[KPIDefinition] = Field(default_factory=list, max_length=MAX_KPIS)
     trends: list[TrendDefinition] = Field(default_factory=list, max_length=MAX_TRENDS)
     limitations: list[str] = Field(default_factory=list)
 

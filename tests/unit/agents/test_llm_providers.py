@@ -239,7 +239,7 @@ def test_prompt_only_structured_request_omits_unsupported_response_format(
     assert "JSON Schema" in system_message["content"]
 
 
-def test_invalid_response_is_retried_with_schema_guidance(
+def test_invalid_response_is_not_retried(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     requests: list[dict[str, Any]] = []
@@ -259,27 +259,25 @@ def test_invalid_response_is_retried_with_schema_guidance(
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-secret")
     monkeypatch.setattr(llm_module, "AsyncOpenAI", FakeAsyncOpenAI)
 
-    result = asyncio.run(
-        request_structured(
-            policy=_policy(
-                "openrouter",
-                strict_json_schema=False,
-                supports_response_format=False,
-            ),
-            response_model=StructuredAnswer,
-            schema_name="structured_answer",
-            messages=[{"role": "user", "content": "Answer"}],
+    with pytest.raises(ProviderRequestError) as error:
+        asyncio.run(
+            request_structured(
+                policy=_policy(
+                    "openrouter",
+                    strict_json_schema=False,
+                    supports_response_format=False,
+                ),
+                response_model=StructuredAnswer,
+                schema_name="structured_answer",
+                messages=[{"role": "user", "content": "Answer"}],
+            )
         )
-    )
 
-    assert result == StructuredAnswer(answer="recovered")
-    assert len(requests) == 2
-    assert "previous response could not be validated" in requests[1]["messages"][0][
-        "content"
-    ].lower()
+    assert error.value.category == "invalid_response"
+    assert len(requests) == 1
 
 
-def test_missing_provider_choices_are_retried(
+def test_missing_provider_choices_are_not_retried(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     requests: list[dict[str, Any]] = []
@@ -299,20 +297,21 @@ def test_missing_provider_choices_are_retried(
     monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-secret")
     monkeypatch.setattr(llm_module, "AsyncOpenAI", FakeAsyncOpenAI)
 
-    result = asyncio.run(
-        request_structured(
-            policy=_policy("openrouter"),
-            response_model=StructuredAnswer,
-            schema_name="structured_answer",
-            messages=[{"role": "user", "content": "Answer"}],
+    with pytest.raises(ProviderRequestError) as error:
+        asyncio.run(
+            request_structured(
+                policy=_policy("openrouter"),
+                response_model=StructuredAnswer,
+                schema_name="structured_answer",
+                messages=[{"role": "user", "content": "Answer"}],
+            )
         )
-    )
 
-    assert result == StructuredAnswer(answer="recovered")
-    assert len(requests) == 2
+    assert error.value.category == "invalid_response"
+    assert len(requests) == 1
 
 
-def test_rejected_strict_schema_downgrades_to_json_object_mode(
+def test_rejected_strict_schema_is_not_retried(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     requests: list[dict[str, Any]] = []
@@ -335,20 +334,19 @@ def test_rejected_strict_schema_downgrades_to_json_object_mode(
     monkeypatch.setenv("GROQ_API_KEY", "groq-secret")
     monkeypatch.setattr(llm_module, "AsyncGroq", FakeAsyncGroq)
 
-    result = asyncio.run(
-        request_structured(
-            policy=_policy("groq"),
-            response_model=StructuredAnswer,
-            schema_name="structured_answer",
-            messages=[{"role": "user", "content": "Answer"}],
+    with pytest.raises(ProviderRequestError) as error:
+        asyncio.run(
+            request_structured(
+                policy=_policy("groq"),
+                response_model=StructuredAnswer,
+                schema_name="structured_answer",
+                messages=[{"role": "user", "content": "Answer"}],
+            )
         )
-    )
 
-    assert result == StructuredAnswer(answer="recovered")
-    assert [
-        request["response_format"]["type"] for request in requests
-    ] == ["json_schema", "json_object"]
-    assert "JSON Schema" in requests[1]["messages"][0]["content"]
+    assert error.value.category == "provider_error"
+    assert error.value.status_code == 400
+    assert [request["response_format"]["type"] for request in requests] == ["json_schema"]
 
 
 def test_chat_model_factory_dispatches_from_the_agent_policy(

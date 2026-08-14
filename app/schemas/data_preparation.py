@@ -8,7 +8,7 @@ from typing import Any, Literal, TypeAlias, get_args
 from pydantic import Field, model_validator
 
 from app.core.config import AgentProvider
-from app.schemas.common import StrictModel
+from app.schemas.common import StrictModel, ValueFormat
 
 class TransformationOperation(str, Enum):
     fill_constant = "fill_constant"
@@ -96,6 +96,13 @@ class SemanticRoleAssignment(StrictModel):
     column: str
     role: SemanticRole
     reason: str | None = None
+
+
+class MeasureFormatAssignment(StrictModel):
+    """A model-selected display format for a numeric measure."""
+
+    column: str
+    value_format: ValueFormat
 
 class PreparationTransformation(StrictModel):
     operation: TransformationOperation
@@ -192,6 +199,7 @@ class PreparationPlan(StrictModel):
     date_column: str | None = None
     transaction_id_columns: list[str] = Field(default_factory=list)
     primary_measures: list[str] = Field(default_factory=list)
+    measure_formats: list[MeasureFormatAssignment] = Field(default_factory=list)
     dimensions: list[str] = Field(default_factory=list)
     categorical_columns: list[str] = Field(default_factory=list)
     currency: str | None = None
@@ -245,6 +253,7 @@ class PreparedDatasetPackage(StrictModel):
     semantic_column_map: dict[str, str] = Field(default_factory=dict)
     date_column: str | None
     primary_measures: list[str] = Field(default_factory=list)
+    measure_formats: dict[str, ValueFormat] = Field(default_factory=dict)
     dimension_candidates: list[str] = Field(default_factory=list)
     time_series_candidates: list[str] = Field(default_factory=list)
     capability_flags: CapabilityFlags

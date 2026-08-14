@@ -559,21 +559,17 @@ class DatasetDocumentBuilder:
     def _inferred_type(series: pd.Series) -> str:
         if pd.api.types.is_numeric_dtype(series):
             return "numeric"
-        name = str(series.name).casefold()
-        if any(word in name for word in ("date", "time", "year", "month", "period")):
-            parsed_dates = pd.to_datetime(series, errors="coerce")
-            if len(series) and parsed_dates.notna().mean() >= 0.6:
-                return "date"
+        parsed_dates = pd.to_datetime(series, errors="coerce")
+        if len(series) and parsed_dates.notna().mean() >= 0.6:
+            return "date"
         if series.nunique(dropna=True) <= max(50, len(series) * 0.2):
             return "categorical"
         return "text"
 
     @staticmethod
-    def _average(name: str) -> bool:
-        return any(
-            word in name.lower()
-            for word in ("price", "rate", "percent", "margin", "average", "avg", "score")
-        )
+    def _average(_name: str) -> bool:
+        """Use additive aggregation unless the prepared analysis supplies another one."""
+        return False
 
     @staticmethod
     def _unique_keep_order(values: Iterable[str | None]) -> list[str]:

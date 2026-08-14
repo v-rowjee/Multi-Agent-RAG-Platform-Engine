@@ -15,40 +15,40 @@ from app.agents.multi.data_preparation import (
 from app.schemas.data_preparation import (
     ColumnProfile,
     DatasetProfile,
+    MeasureFormatAssignment,
     PreparationPlan,
     PreparationTransformation,
     TransformationOperation,
 )
-from app.services.data.cleaning import _generic_clean_csv
+from app.services.data.cleaning import _generic_clean_csv, generic_clean_dataframe
 from app.services.data.profiling import _profile_dataset
 from app.services.data.preparation import (
-    _apply_formula,
     _deterministic_plan,
     _execute_plan,
     _validate_plan,
 )
 
 
-def test_formula_reconstruction_fills_only_missing_target_values() -> None:
-    dataframe = pd.DataFrame(
-        {
-            "quantity": [2.0, 3.0],
-            "unit_price": [5.0, 7.0],
-            "revenue": [None, 99.0],
-        }
+def test_formula_reconstruction_is_rejected() -> None:
+    profile = _profile_dataset(
+        pd.DataFrame({"target": [None, 99.0], "factor": [2.0, 3.0]}),
+        None,
     )
-    transformation = PreparationTransformation(
-        operation=TransformationOperation.reconstruct_from_formula,
-        column="revenue",
-        formula_id="quantity_times_unit_price",
-        source_columns=["quantity", "unit_price"],
+    plan = PreparationPlan(
+        primary_measures=["target", "factor"],
+        transformations=[
+            PreparationTransformation(
+                operation=TransformationOperation.reconstruct_from_formula,
+                column="target",
+                formula_id="arbitrary_formula",
+                source_columns=["factor"],
+            )
+        ],
     )
+    validated, _, rejected = _validate_plan(plan, profile)
 
-    count, warnings = _apply_formula(dataframe, transformation)
-
-    assert count == 1
-    assert warnings == []
-    assert dataframe["revenue"].tolist() == [10.0, 99.0]
+    assert validated.transformations == []
+    assert rejected == ["reconstruct_from_formula on `target`: formula reconstruction is not supported"]
 
 
 def test_invalid_llm_plan_uses_fallback_without_exception_trace(
@@ -85,6 +85,68 @@ def test_invalid_llm_plan_uses_fallback_without_exception_trace(
     ]
     assert len(caplog.records) == 1
     assert caplog.records[0].exc_info is None
+
+
+def test_llm_preparation_plan_is_authoritative_for_measure_interpretation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = DatasetProfile(
+        row_count=3,
+        column_count=2,
+        column_profiles=[
+            ColumnProfile(
+                name="metric_alpha",
+                inferred_type="numeric",
+                null_count=0,
+                null_percentage=0,
+                unique_count=3,
+                numeric_minimum=0.02,
+                numeric_maximum=0.15,
+            ),
+            ColumnProfile(
+                name="segment_beta",
+                inferred_type="categorical",
+                null_count=0,
+                null_percentage=0,
+                unique_count=2,
+            ),
+        ],
+        candidate_numeric_columns=["metric_alpha"],
+        candidate_categorical_columns=["segment_beta"],
+    )
+    expected = PreparationPlan(
+        primary_measures=["metric_alpha"],
+        dimensions=["segment_beta"],
+        measure_formats=[
+            MeasureFormatAssignment(
+                column="metric_alpha", value_format="percentage_fraction"
+            )
+        ],
+    )
+
+    async def suggested_plan(_: DatasetProfile) -> PreparationPlan:
+        return expected
+
+    monkeypatch.setattr(preparation_module, "_request_plan", suggested_plan)
+    plan, source, warnings = asyncio.run(_plan_with_optional_enrichment(profile))
+
+    assert plan == expected
+    assert source != "deterministic"
+    assert warnings == []
+
+
+def test_cleaning_inferrs_dates_from_values_not_column_names() -> None:
+    cleaned, report = generic_clean_dataframe(
+        pd.DataFrame(
+            {
+                "period_alpha": ["2025-01-01", "2025-02-01", "2025-03-01"],
+                "metric_beta": [1, 2, 3],
+            }
+        )
+    )
+
+    assert pd.api.types.is_datetime64_any_dtype(cleaned["period_alpha"])
+    assert report.inferred_column_types["period_alpha"] == "date"
 
 
 def test_preparation_plan_normalizes_common_llm_response_variants() -> None:
@@ -174,7 +236,7 @@ def test_transformation_reason_is_optional_metadata() -> None:
     assert plan.transformations[0].reason is None
 
 
-def test_deterministic_semantic_role_detection_uses_profile_statistics() -> None:
+def test_deterministic_semantic_role_fallback_uses_profile_statistics() -> None:
     row_count = 100
     frame = pd.DataFrame(
         {
@@ -191,7 +253,7 @@ def test_deterministic_semantic_role_detection_uses_profile_statistics() -> None
     roles = {role.column: role.role for role in plan.semantic_roles}
 
     assert roles == {
-        "transaction_id": "transaction_id",
+        "transaction_id": "text",
         "transaction_date": "date",
         "net_revenue_gbp": "primary_measure",
         "branch": "dimension",

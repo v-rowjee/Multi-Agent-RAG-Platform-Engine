@@ -9,8 +9,6 @@ from app.agents.multi import anomaly_detection as anomaly_module
 from app.agents.multi.anomaly_detection import AnomalyDetectionAgent
 from app.schemas.specialists import (
     AnomalyDefinition,
-    AnomalyInterpretation,
-    AnomalyInterpretationOutput,
     AnomalyPlan,
     AnomalyResult,
 )
@@ -29,7 +27,7 @@ def _prepared() -> dict[str, object]:
     }
 
 
-def test_isolation_forest_detects_numeric_outlier_and_requests_interpretation(
+def test_isolation_forest_detects_numeric_outlier_with_deterministic_interpretation(
     monkeypatch,
 ) -> None:
     frame = pd.DataFrame(
@@ -38,8 +36,6 @@ def test_isolation_forest_detects_numeric_outlier_and_requests_interpretation(
             "revenue": [100, 101, 99, 102, 98, 101, 100, 99, 102, 100, 101, 900],
         }
     )
-    captured: list[object] = []
-
     async def plan(_: dict[str, object]) -> AnomalyPlan:
         return AnomalyPlan(
             analyses=[
@@ -54,31 +50,12 @@ def test_isolation_forest_detects_numeric_outlier_and_requests_interpretation(
             ]
         )
 
-    async def interpret(
-        _: dict[str, object],
-        anomalies,
-    ) -> AnomalyInterpretationOutput:
-        captured.extend(anomalies)
-        return AnomalyInterpretationOutput(
-            interpretations=[
-                AnomalyInterpretation(
-                    anomaly_id=anomalies[0].id,
-                    business_interpretation=(
-                        "Revenue was unusually high for the period and should be "
-                        "validated against promotions or exceptional orders."
-                    ),
-                )
-            ]
-        )
-
     monkeypatch.setattr(anomaly_module, "_request_plan", plan)
-    monkeypatch.setattr(anomaly_module, "_request_interpretations", interpret)
 
     result, execution_status, failure_reason = asyncio.run(
         AnomalyDetectionAgent().run_with_status(_prepared(), frame)
     )
 
-    assert captured
     assert execution_status == "succeeded"
     assert failure_reason is None
     assert all(item.method == "isolation_forest" for item in result.anomalies)
@@ -86,7 +63,7 @@ def test_isolation_forest_detects_numeric_outlier_and_requests_interpretation(
     assert result.anomalies[0].business_interpretation
 
 
-def test_interpretation_failure_keeps_detected_observations(monkeypatch) -> None:
+def test_detected_observations_do_not_trigger_a_second_llm_call(monkeypatch) -> None:
     frame = pd.DataFrame({"revenue": [10, 11, 9, 12, 10, 11, 9, 100]})
 
     async def plan(_: dict[str, object]) -> AnomalyPlan:
@@ -100,20 +77,15 @@ def test_interpretation_failure_keeps_detected_observations(monkeypatch) -> None
             ]
         )
 
-    async def unavailable(_: dict[str, object], __) -> AnomalyInterpretationOutput:
-        raise RuntimeError("LLM unavailable")
-
     monkeypatch.setattr(anomaly_module, "_request_plan", plan)
-    monkeypatch.setattr(anomaly_module, "_request_interpretations", unavailable)
 
     result, execution_status, _ = asyncio.run(
         AnomalyDetectionAgent().run_with_status(_prepared(), frame)
     )
 
     assert result.anomalies
-    assert execution_status == "fallback"
+    assert execution_status == "succeeded"
     assert all(item.business_interpretation for item in result.anomalies)
-    assert any("deterministic fallback" in warning for warning in result.warnings)
 
 
 def test_displayed_anomalies_reserve_critical_for_strongest_fifth() -> None:

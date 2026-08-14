@@ -20,7 +20,6 @@ from app.services.data.preparation import (
     _dedupe,
     _deterministic_plan,
     _execute_plan,
-    _merge_plan_enrichment,
     _reconcile_temporal_capabilities,
     _temporal_profile,
     _validate_plan,
@@ -34,11 +33,6 @@ SUPPORTED_OPERATIONS = {
     "exclude_from_measure_analysis",
     "exclude_from_temporal_analysis",
     "drop_rows_with_missing",
-    "reconstruct_from_formula",
-}
-SUPPORTED_FORMULAS = {
-    "quantity_times_unit_price",
-    "gross_revenue_minus_discount",
 }
 
 logger = logging.getLogger(__name__)
@@ -52,7 +46,6 @@ async def _request_plan(profile: DatasetProfile) -> PreparationPlan:
     prompts = render_agent_prompts(
         "multi/data_preparation",
         supported_operations=sorted(SUPPORTED_OPERATIONS),
-        supported_formulas=sorted(SUPPORTED_FORMULAS),
         profile=_compact_profile_payload(profile),
         output_schema=PreparationPlan.model_json_schema(mode="serialization"),
     )
@@ -74,12 +67,7 @@ async def _plan_with_optional_enrichment(
     warnings: list[str] = []
     policy = agent_model_policy("data_preparation")
     try:
-        suggestion = await _request_plan(profile)
-        return (
-            _merge_plan_enrichment(base_plan, suggestion, profile),
-            policy.provider,
-            warnings,
-        )
+        return await _request_plan(profile), policy.provider, warnings
     except Exception as error:
         logger.warning(
             "Optional data preparation enrichment failed; deterministic plan retained "
@@ -180,10 +168,13 @@ class DataPreparationAgent:
         package = PreparedDatasetPackage(
             file_name=str(file_name or "dataset.csv"),
             dataset_profile=prepared_profile,
-            currency=prepared_profile.currency,
+            currency=plan.currency,
             semantic_column_map=semantic_map,
             date_column=plan.date_column,
             primary_measures=plan.primary_measures,
+            measure_formats={
+                item.column: item.value_format for item in plan.measure_formats
+            },
             dimension_candidates=plan.dimensions,
             time_series_candidates=plan.time_series_candidates,
             capability_flags=plan.capability_flags,

@@ -5,7 +5,14 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 DashboardStatus = Literal["success", "partial", "failed"]
-ValueFormat = Literal["number", "currency", "percentage", "decimal", "text"]
+ValueFormat = Literal[
+    "number",
+    "currency",
+    "percentage",
+    "percentage_fraction",
+    "decimal",
+    "text",
+]
 IndicatorKind = Literal["increase", "decrease", "note"]
 Severity = Literal["info", "warning", "critical"]
 Priority = Literal["low", "medium", "high", "critical"]

@@ -15,7 +15,6 @@ from app.core.prompt_loader import render_agent_prompts
 from app.schemas.specialists import (
     AnomalyDefinition,
     AnomalyDetectionOutput,
-    AnomalyInterpretationOutput,
     AnomalyPlan,
     AnomalyResult,
 )
@@ -240,76 +239,12 @@ def _detect(item: AnomalyDefinition, values: pd.Series, group: str | None = None
     ]
 
 
-def _interpretation_payload(
-    prepared: dict[str, Any],
-    anomalies: list[AnomalyResult],
-) -> dict[str, Any]:
-    profile = prepared.get("dataset_profile") or {}
-    return {
-        "business_description": profile.get("business_description"),
-        "anomalies": [
-            {
-                "anomaly_id": item.id,
-                "metric": item.metric,
-                "period": item.period,
-                "observed_value": item.observed_value,
-                "expected_value": item.expected_value,
-                "severity": item.severity,
-                "evidence": item.evidence,
-            }
-            for item in anomalies
-        ],
-    }
-
-
-async def _request_interpretations(
-    prepared: dict[str, Any],
-    anomalies: list[AnomalyResult],
-) -> AnomalyInterpretationOutput:
-    prompts = render_agent_prompts(
-        "multi/anomaly_detection",
-        message_set="interpretation",
-        payload=_interpretation_payload(prepared, anomalies),
-    )
-    return await request_structured(
-        policy=agent_model_policy("anomaly_detection"),
-        response_model=AnomalyInterpretationOutput,
-        schema_name="anomaly_detection_interpretation",
-        messages=[
-            {"role": "system", "content": prompts.system},
-            {"role": "user", "content": prompts.user},
-        ],
-    )
-
-
 def _fallback_interpretation(anomaly: AnomalyResult) -> str:
     period = f" in {anomaly.period}" if anomaly.period else ""
     return (
         f"{anomaly.metric} is an unusually isolated observation{period}; "
         "validate the underlying records and review relevant operational drivers."
     )
-
-
-def _apply_interpretations(
-    anomalies: list[AnomalyResult],
-    interpretations: AnomalyInterpretationOutput,
-) -> list[AnomalyResult]:
-    by_id = {
-        item.anomaly_id: item.business_interpretation.strip()
-        for item in interpretations.interpretations
-        if item.business_interpretation.strip()
-    }
-    return [
-        item.model_copy(
-            update={
-                "business_interpretation": by_id.get(
-                    item.id,
-                    _fallback_interpretation(item),
-                )
-            }
-        )
-        for item in anomalies
-    ]
 
 
 class AnomalyDetectionAgent:
@@ -359,27 +294,12 @@ class AnomalyDetectionAgent:
         anomalies.sort(key=lambda result: -(result.anomaly_score or 0))
         anomalies = _classify_severities(anomalies[:MAX_ANOMALIES])
         if anomalies:
-            try:
-                interpretations = await _request_interpretations(
-                    prepared_dataset,
-                    anomalies,
+            anomalies = [
+                item.model_copy(
+                    update={"business_interpretation": _fallback_interpretation(item)}
                 )
-                anomalies = _apply_interpretations(anomalies, interpretations)
-            except Exception as exc:
-                warnings.append(
-                    "Business interpretation used a deterministic fallback: "
-                    f"{safe_model_failure_reason(exc)}"
-                )
-                anomalies = [
-                    item.model_copy(
-                        update={
-                            "business_interpretation": _fallback_interpretation(item)
-                        }
-                    )
-                    for item in anomalies
-                ]
-                execution_status = "fallback"
-                failure_reason = safe_model_failure_reason(exc)
+                for item in anomalies
+            ]
         return (
             AnomalyDetectionOutput(
                 anomalies=anomalies,

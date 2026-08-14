@@ -4,11 +4,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-import numpy as np
 import pandas as pd
 
 from app.core.config import AgentProvider
-from app.core.currency import detect_currency
 from app.core.exceptions import DataPreparationError
 from app.schemas.data_preparation import (
     CapabilityFlags,
@@ -31,13 +29,8 @@ from app.services.data.series import (
     temporal_period_count,
 )
 
-SUPPORTED_FORMULAS = {"quantity_times_unit_price", "gross_revenue_minus_discount"}
-FORMULA_SOURCE_COLUMNS = {"quantity_times_unit_price": ("quantity", "unit_price"), "gross_revenue_minus_discount": ("gross_revenue", "discount")}
 MIN_TREND_PERIODS = 2
 MIN_ANOMALY_OBSERVATIONS = 8
-
-def _contains_any(column: str, tokens: tuple[str, ...]) -> bool:
-    return any(token in column.lower() for token in tokens)
 
 def _semantic_role_for_column(
     item: ColumnProfile,
@@ -45,25 +38,7 @@ def _semantic_role_for_column(
 ) -> SemanticRoleAssignment:
     """Infer one stable semantic role from bounded profile metadata."""
     name = item.name
-    lowered = name.casefold()
     non_null_count = max(0, profile.row_count - item.null_count)
-    unique_ratio = item.unique_count / non_null_count if non_null_count else 0.0
-    mostly_unique = non_null_count > 0 and unique_ratio >= 0.8
-
-    explicit_identifier = (
-        lowered == "id"
-        or lowered.endswith("_id")
-        or _contains_any(
-            lowered,
-            ("transaction_id", "order_id", "invoice_id", "receipt_id"),
-        )
-    )
-    if explicit_identifier and mostly_unique:
-        return SemanticRoleAssignment(
-            column=name,
-            role="transaction_id",
-            reason="Identifier-like name with a mostly unique value distribution.",
-        )
 
     if (
         item.inferred_type == "date"
@@ -75,11 +50,7 @@ def _semantic_role_for_column(
             reason="Values are consistently parseable as dates.",
         )
 
-    boolean_name = (
-        lowered.startswith(("is_", "has_", "can_"))
-        or lowered.endswith(("_flag", "_active", "_enabled"))
-    )
-    if item.inferred_type == "boolean" or (boolean_name and item.unique_count <= 2):
+    if item.inferred_type == "boolean":
         return SemanticRoleAssignment(
             column=name,
             role="flag",
@@ -87,44 +58,10 @@ def _semantic_role_for_column(
         )
 
     if item.inferred_type == "numeric":
-        if lowered in {"year", "month", "quarter", "week", "day"} or lowered.endswith(
-            ("_year", "_month", "_quarter", "_week", "_day")
+        if (
+            non_null_count >= 20
+            and item.unique_count <= min(20, max(2, int(non_null_count * 0.05)))
         ):
-            return SemanticRoleAssignment(
-                column=name,
-                role="dimension",
-                reason="Numeric calendar helper used for grouping.",
-            )
-        if explicit_identifier:
-            return SemanticRoleAssignment(
-                column=name,
-                role="transaction_id",
-                reason="Identifier-like numeric column.",
-            )
-        if _contains_any(
-            lowered,
-            (
-                "revenue",
-                "sales",
-                "amount",
-                "profit",
-                "cost",
-                "value",
-                "quantity",
-                "price",
-                "margin",
-                "discount",
-                "rate",
-                "percent",
-                "pct",
-            ),
-        ):
-            return SemanticRoleAssignment(
-                column=name,
-                role="primary_measure",
-                reason="Numeric business value suitable for aggregation.",
-            )
-        if item.unique_count <= min(20, max(2, int(non_null_count * 0.05))):
             return SemanticRoleAssignment(
                 column=name,
                 role="dimension",
@@ -137,14 +74,9 @@ def _semantic_role_for_column(
         )
 
     if item.inferred_type == "categorical":
-        role: Literal["category", "dimension"] = (
-            "category"
-            if _contains_any(lowered, ("category", "type", "status", "class"))
-            else "dimension"
-        )
         return SemanticRoleAssignment(
             column=name,
-            role=role,
+            role="dimension",
             reason="Low-cardinality text suitable for grouping.",
         )
 
@@ -189,34 +121,7 @@ def _deterministic_plan(
     for name, item in columns.items():
         if item.null_count <= 0:
             continue
-        lowered = name.lower()
-        if lowered == "product_name" or ("product" in lowered and "name" in lowered):
-            transformations.append(
-                PreparationTransformation(
-                    operation=TransformationOperation.fill_constant,
-                    column=name,
-                    value="Unknown Product",
-                    reason="Missing product labels are safe to group as unknown.",
-                )
-            )
-        elif "sales_channel" in lowered or "channel" == lowered:
-            transformations.append(
-                PreparationTransformation(
-                    operation=TransformationOperation.fill_constant,
-                    column=name,
-                    value="Unknown",
-                    reason="Missing sales channel labels are safe to group as unknown.",
-                )
-            )
-        elif "description" in lowered or "notes" in lowered or "comment" in lowered:
-            transformations.append(
-                PreparationTransformation(
-                    operation=TransformationOperation.preserve_missing,
-                    column=name,
-                    reason="Optional descriptive text should preserve missing values.",
-                )
-            )
-        elif name == date_column:
+        if name == date_column:
             transformations.append(
                 PreparationTransformation(
                     operation=TransformationOperation.exclude_from_temporal_analysis,
@@ -242,14 +147,15 @@ def _deterministic_plan(
         date_column=date_column,
         transaction_id_columns=transaction_ids,
         primary_measures=primary_measures,
+        measure_formats=[],
         dimensions=dimensions,
         categorical_columns=[
             item.name
             for item in profile.column_profiles
             if item.inferred_type in {"categorical", "boolean"}
         ][:10],
-        currency=_detect_currency(profile),
-        time_granularity=_guess_time_granularity(profile, date_column),
+        currency=None,
+        time_granularity=None,
         time_series_candidates=primary_measures[:3] if date_column else [],
         transformations=transformations,
         capability_flags=CapabilityFlags(
@@ -267,94 +173,6 @@ def _deterministic_plan(
             has_temporal_data=bool(date_column),
         ),
         limitations=limitations,
-    )
-
-def _detect_currency(profile: DatasetProfile) -> str | None:
-    return detect_currency(item.name for item in profile.column_profiles)
-
-def _guess_time_granularity(profile: DatasetProfile, date_column: str | None) -> Literal["day", "week", "month", "quarter", "year"] | None:
-    if not date_column:
-        return None
-    column = date_column.lower()
-    if "year" in column:
-        return "year"
-    if "quarter" in column:
-        return "quarter"
-    if "month" in column:
-        return "month"
-    return "day"
-
-def _merge_plan_enrichment(
-    base: PreparationPlan,
-    suggestion: PreparationPlan,
-    profile: DatasetProfile,
-) -> PreparationPlan:
-    """Merge safe LLM enrichment without replacing deterministic assignments."""
-    known_columns = set(_profile_map(profile))
-    roles_by_column = {role.column: role for role in base.semantic_roles}
-    for role in suggestion.semantic_roles:
-        current = roles_by_column.get(role.column)
-        if role.column not in known_columns or (current and current.role != "unknown"):
-            continue
-        roles_by_column[role.column] = role
-
-    ordered_roles = [
-        roles_by_column[item.name]
-        for item in profile.column_profiles
-        if item.name in roles_by_column
-    ]
-    date_columns = [role.column for role in ordered_roles if role.role == "date"]
-    transaction_ids = [
-        role.column for role in ordered_roles if role.role == "transaction_id"
-    ][:3]
-    primary_measures = [
-        role.column
-        for role in ordered_roles
-        if role.role == "primary_measure"
-        and role.column in profile.candidate_numeric_columns
-    ][:5]
-    dimensions = [
-        role.column
-        for role in ordered_roles
-        if role.role in {"dimension", "category", "flag"}
-    ][:10]
-
-    transformations = list(base.transformations)
-    seen_transformations = {
-        (item.operation, item.column) for item in transformations
-    }
-    for transformation in suggestion.transformations:
-        key = (transformation.operation, transformation.column)
-        if key in seen_transformations:
-            continue
-        transformations.append(transformation)
-        seen_transformations.add(key)
-
-    date_column = base.date_column or (date_columns[0] if date_columns else None)
-    return base.model_copy(
-        update={
-            "semantic_roles": ordered_roles,
-            "date_column": date_column,
-            "transaction_id_columns": transaction_ids,
-            "primary_measures": primary_measures,
-            "dimensions": dimensions,
-            "categorical_columns": _dedupe(
-                [*base.categorical_columns, *suggestion.categorical_columns]
-            )[:10],
-            "currency": base.currency or suggestion.currency,
-            "time_granularity": (
-                base.time_granularity or suggestion.time_granularity
-            ),
-            "time_series_candidates": (
-                primary_measures[:3] if date_column else []
-            ),
-            "transformations": transformations,
-            # Capability detection remains deterministic metadata logic.
-            "capability_flags": base.capability_flags,
-            "limitations": _dedupe(
-                [*base.limitations, *suggestion.limitations]
-            ),
-        }
     )
 
 def _profile_map(profile: DatasetProfile) -> dict[str, ColumnProfile]:
@@ -384,6 +202,14 @@ def _validate_plan(plan: PreparationPlan, profile: DatasetProfile) -> tuple[Prep
     plan.primary_measures = [
         column for column in plan.primary_measures if column in profile.candidate_numeric_columns
     ]
+    seen_formats: set[str] = set()
+    valid_formats = []
+    for item in plan.measure_formats:
+        if item.column not in plan.primary_measures or item.column in seen_formats:
+            continue
+        valid_formats.append(item)
+        seen_formats.add(item.column)
+    plan.measure_formats = valid_formats
     plan.dimensions = [column for column in plan.dimensions if known(column)]
     plan.categorical_columns = [column for column in plan.categorical_columns if known(column)]
     plan.time_series_candidates = [
@@ -431,24 +257,8 @@ def _validate_plan(plan: PreparationPlan, profile: DatasetProfile) -> tuple[Prep
                 continue
 
         if transformation.operation == TransformationOperation.reconstruct_from_formula:
-            if transformation.formula_id not in SUPPORTED_FORMULAS:
-                rejected.append(f"{reason}: unsupported formula ID")
-                continue
-            required = FORMULA_SOURCE_COLUMNS.get(transformation.formula_id or "", ())
-            sources = transformation.source_columns or list(required)
-            if not all(source in columns for source in sources):
-                rejected.append(f"{reason}: unknown reconstruction source column")
-                continue
-            if transformation.formula_id in FORMULA_SOURCE_COLUMNS and set(sources) != set(required):
-                rejected.append(f"{reason}: source columns do not match registered formula")
-                continue
-            if transformation.column not in columns:
-                rejected.append(f"{reason}: target column missing")
-                continue
-            source_profiles = _profile_map(profile)
-            if any(source_profiles[source].inferred_type != "numeric" for source in sources):
-                rejected.append(f"{reason}: reconstruction source columns must be numeric")
-                continue
+            rejected.append(f"{reason}: formula reconstruction is not supported")
+            continue
 
         existing_ops.add(transformation.operation)
         valid_transformations.append(transformation)
@@ -589,10 +399,6 @@ def _execute_plan(
             temporal_mask = temporal_mask.reindex(prepared.index, fill_value=False)
             executed.append(f"Dropped {before - len(prepared)} rows with missing `{column}`.")
 
-        elif operation == TransformationOperation.reconstruct_from_formula:
-            count, formula_warnings = _apply_formula(prepared, transformation)
-            warnings.extend(formula_warnings)
-            executed.append(f"Reconstructed {count} missing `{column}` values with `{transformation.formula_id}`.")
 
     temporal_excluded = 0
     if plan.date_column and plan.date_column in prepared.columns:
@@ -612,31 +418,6 @@ def _execute_plan(
         warnings=warnings,
     )
     return prepared, report
-
-def _apply_formula(df: pd.DataFrame, transformation: PreparationTransformation) -> tuple[int, list[str]]:
-    warnings: list[str] = []
-    target = transformation.column
-    formula_id = transformation.formula_id
-    sources = transformation.source_columns or list(FORMULA_SOURCE_COLUMNS.get(formula_id or "", ()))
-    missing_target = df[target].isna()
-    if not missing_target.any():
-        return 0, warnings
-
-    source_values = {source: pd.to_numeric(df[source], errors="coerce") for source in sources}
-    if formula_id == "quantity_times_unit_price":
-        values = source_values["quantity"] * source_values["unit_price"]
-    elif formula_id == "gross_revenue_minus_discount":
-        values = source_values["gross_revenue"] - source_values["discount"]
-    else:
-        warnings.append(f"Unsupported formula skipped: {formula_id}")
-        return 0, warnings
-
-    valid = missing_target & values.notna() & np.isfinite(values)
-    df.loc[valid, target] = values.loc[valid]
-    invalid_count = int(missing_target.sum() - valid.sum())
-    if invalid_count:
-        warnings.append(f"{invalid_count} `{target}` values could not be reconstructed and remain missing.")
-    return int(valid.sum()), warnings
 
 def _dedupe(values: list[str]) -> list[str]:
     output: list[str] = []

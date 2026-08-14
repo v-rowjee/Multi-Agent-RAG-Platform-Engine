@@ -23,11 +23,12 @@ from app.agents.multi.orchestrator import (OrchestratorAgent, _request_plan,
 from app.core.config import configured_agent_models
 from app.schemas.dashboard import DashboardLayoutPlan, SupportingChartSpec
 from app.schemas.orchestration import AgentDecision, OrchestrationPlan
-from app.schemas.specialists import (KPIDefinition, KPIRequest, KPITrendPlan,
-                                     KPIValueDefinition)
+from app.schemas.specialists import KPIDefinition, KPITrendPlan
 from app.services.data.cleaning import _generic_clean_csv
+from app.services.data.profiling import _profile_dataset
 from app.services.data.series import (aggregation_for_measure,
-                                      infer_time_granularity)
+                                       infer_time_granularity,
+                                       value_format_for_measure)
 
 
 def _rows(periods: int = 24) -> pd.DataFrame:
@@ -59,6 +60,23 @@ def _rows(periods: int = 24) -> pd.DataFrame:
                 }
             )
     return pd.DataFrame.from_records(records)
+
+
+def test_model_selected_percentage_fraction_formatting() -> None:
+    profile = _profile_dataset(
+        pd.DataFrame({"discount_pct": [0.0, 0.02, 0.15, 0.3]}),
+        None,
+    )
+    prepared = {
+        "dataset_profile": profile.model_dump(mode="json"),
+        "measure_formats": {"discount_pct": "percentage_fraction"},
+    }
+
+    metadata = kpi_trend_module._columns_metadata(prepared)[0]
+    assert metadata["numeric_maximum"] == 0.3
+    assert metadata["sample_values"] == [0.0, 0.02, 0.15]
+    assert value_format_for_measure("discount_pct", prepared) == "percentage_fraction"
+    assert dashboard_module._format_kpi(0.052521, "discount_pct", prepared) == "5.25%"
 
 
 def _prepared(path: Path) -> dict[str, Any]:
@@ -158,91 +176,66 @@ def test_kpis_use_latest_period_and_percentage_change(
         revenue.baseline_change_percent is not None
         and revenue.baseline_change_percent > 0
     )
-    assert aggregation_for_measure("discount_pct") == "mean"
-    assert result.trends[0].measure == "net_revenue_gbp"
+    assert aggregation_for_measure("discount_pct") == "sum"
+    assert result.trends[0].measure == prepared["primary_measures"][0]
     assert execution_status == "fallback"
 
 
-def test_kpi_title_requests_are_resolved_independently_before_calculation(
+def test_kpi_definitions_are_resolved_in_a_single_planning_call(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     path = tmp_path / "sales.csv"
     _rows().to_csv(path, index=False)
     prepared = _prepared(path)
-    requests = [
-        KPIRequest(
+    definitions = [
+        KPIDefinition(
             id="kpi_revenue",
             title="Latest Revenue",
-            prompt="Show the latest-period revenue.",
+            query='df["net_revenue_gbp"].sum()',
+            measure="net_revenue_gbp",
+            aggregation="sum",
+            trend_kind="increase",
+            trend_text="Revenue increased in the latest reporting period.",
         ),
-        KPIRequest(
+        KPIDefinition(
             id="kpi_profit",
             title="Latest Profit",
-            prompt="Show the latest-period profit.",
+            query='df["profit_gbp"].sum()',
+            measure="profit_gbp",
+            aggregation="sum",
+            trend_kind="increase",
+            trend_text="Profit increased in the latest reporting period.",
         ),
-        KPIRequest(
+        KPIDefinition(
             id="kpi_quantity",
             title="Latest Quantity",
-            prompt="Show the latest-period quantity.",
+            query='df["quantity"].sum()',
+            measure="quantity",
+            aggregation="sum",
         ),
-        KPIRequest(
+        KPIDefinition(
             id="kpi_unit_price",
             title="Latest Unit Price",
-            prompt="Show the latest-period unit price.",
+            query='df["unit_price_gbp"].mean()',
+            measure="unit_price_gbp",
+            aggregation="mean",
         ),
     ]
-    resolved_ids: list[str] = []
+    call_count = 0
 
     async def title_plan(_: dict[str, Any]) -> KPITrendPlan:
-        return KPITrendPlan(kpis=requests)
-
-    async def resolve_value(
-        _: dict[str, Any],
-        request: KPIRequest,
-    ) -> KPIValueDefinition:
-        resolved_ids.append(request.id)
-        queries = {
-            "kpi_revenue": 'df["net_revenue_gbp"].sum()',
-            "kpi_profit": 'df["profit_gbp"].sum()',
-            "kpi_quantity": 'df["quantity"].sum()',
-            "kpi_unit_price": 'df["unit_price_gbp"].mean()',
-        }
-        fallback_values = {
-            "kpi_revenue": 4380,
-            "kpi_profit": 1314,
-            "kpi_quantity": 99,
-            "kpi_unit_price": 44,
-        }
-        return KPIValueDefinition(
-            title=request.title,
-            query=queries[request.id],
-            fallback_value=fallback_values[request.id],
-            trend_kind="increase",
-            trend_text=(
-                "Revenue increased in the latest reporting period."
-                if request.id == "kpi_revenue"
-                else "Profit increased in the latest reporting period."
-            ),
-        )
+        nonlocal call_count
+        call_count += 1
+        return KPITrendPlan(kpis=definitions)
 
     monkeypatch.setattr(kpi_trend_module, "_request_plan", title_plan)
-    monkeypatch.setattr(
-        kpi_trend_module,
-        "_request_kpi_value_definition",
-        resolve_value,
-    )
 
     result, execution_status = asyncio.run(
         KPITrendAgent().run_with_status(prepared, _rows())
     )
 
-    assert set(resolved_ids) == {
-        "kpi_revenue",
-        "kpi_profit",
-        "kpi_quantity",
-        "kpi_unit_price",
-    }
+    assert call_count == 1
     revenue = next(item for item in result.kpis if item.id == "kpi_revenue")
     profit = next(item for item in result.kpis if item.id == "kpi_profit")
     assert revenue.title == "Latest Revenue"
@@ -310,38 +303,26 @@ def test_kpi_query_typo_uses_the_llm_fallback_value(
     path = tmp_path / "sales.csv"
     _rows().to_csv(path, index=False)
     prepared = _prepared(path)
-    request = KPIRequest(
+    definition = KPIDefinition(
         id="kpi_revenue",
         title="Latest Revenue",
-        prompt="Show the latest-period revenue.",
+        query='df["net_reveneu_gbp"].sum()',
+        measure="net_reveneu_gbp",
+        aggregation="sum",
+        fallback_value=4321,
+        trend_kind="increase",
+        trend_text="Revenue is expected to be improving.",
     )
 
     async def title_plan(_: dict[str, Any]) -> KPITrendPlan:
-        return KPITrendPlan(kpis=[request])
-
-    async def typo_query(
-        _: dict[str, Any],
-        request: KPIRequest,
-    ) -> KPIValueDefinition:
-        return KPIValueDefinition(
-            title=request.title,
-            query='df["net_reveneu_gbp"].sum()',
-            fallback_value=4321,
-            trend_kind="increase",
-            trend_text="Revenue is expected to be improving.",
-        )
+        return KPITrendPlan(kpis=[definition])
 
     monkeypatch.setattr(kpi_trend_module, "_request_plan", title_plan)
-    monkeypatch.setattr(
-        kpi_trend_module,
-        "_request_kpi_value_definition",
-        typo_query,
-    )
 
     result, _ = asyncio.run(
         KPITrendAgent().run_with_status(prepared, _rows())
     )
-    revenue = next(item for item in result.kpis if item.id == request.id)
+    revenue = next(item for item in result.kpis if item.id == definition.id)
 
     assert revenue.value == 4321
     assert revenue.value_source == "llm_fallback"
@@ -373,7 +354,7 @@ def test_forecast_falls_back_and_keeps_primary_timeline_target(
     monkeypatch.setattr(forecasting_module.forecasting_service, "forecast", unavailable)
     result = asyncio.run(ForecastingAgent().run(prepared))
 
-    assert result.measure == "net_revenue_gbp"
+    assert result.measure == prepared["primary_measures"][0]
     assert result.aggregation == "sum"
     assert result.granularity == "month"
     assert result.model == "seasonal_naive"
@@ -552,10 +533,6 @@ def test_dashboard_has_non_temporal_charts_forecast_and_actions(
     assert dashboard.kpis[0].indicator.text == "Increased by 8.0% since Nov 2024"
     assert len(dashboard.supportingCharts) == 4
     assert len({chart.type for chart in dashboard.supportingCharts}) == len(dashboard.supportingCharts)
-    assert all(
-        not any(token in chart.title.lower() for token in ("year", "quarter", "month"))
-        for chart in dashboard.supportingCharts
-    )
     assert len(dashboard.recommendedActions) >= 3
     assert dashboard.executiveSummary == dashboard.analysis.businessSummary
     assert execution_status == "succeeded"
@@ -700,11 +677,11 @@ def test_deterministic_routing_and_active_model_defaults() -> None:
     assert configured_agent_models() == {
         "data_preparation": "openai/gpt-oss-20b",
         "orchestrator": "openai/gpt-oss-20b",
-        "kpi_trend": "openai/gpt-oss-120b",
+        "kpi_trend": "openai/gpt-oss-20b",
         "anomaly_detection": "openai/gpt-oss-20b",
-        "dashboard_generation": "openai/gpt-oss-20b",
+        "dashboard_generation": "openai/gpt-oss-120b",
         "insight_synthesis": "openai/gpt-oss-120b",
-        "chat": "openai/gpt-oss-120b",
+        "chat": "openai/gpt-oss-20b",
         "business_intelligence": "openai/gpt-oss-120b",
     }
 

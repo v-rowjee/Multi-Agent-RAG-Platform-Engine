@@ -6,8 +6,6 @@ from typing import Any, Literal, TypeAlias, cast
 
 import pandas as pd
 
-from app.core.currency import detect_currency
-
 TimeGranularity: TypeAlias = Literal["day", "week", "month", "quarter", "year"]
 SUPPORTED_GRANULARITIES: frozenset[TimeGranularity] = frozenset(
     {"day", "week", "month", "quarter", "year"}
@@ -18,44 +16,6 @@ TIME_GRANULARITIES: tuple[TimeGranularity, ...] = (
     "month",
     "quarter",
     "year",
-)
-TEMPORAL_DIMENSION_NAMES = {
-    "date",
-    "day",
-    "day_of_week",
-    "month",
-    "month_name",
-    "quarter",
-    "time",
-    "timestamp",
-    "week",
-    "year",
-}
-AVERAGE_TOKENS = (
-    "average",
-    "avg",
-    "discount",
-    "margin",
-    "pct",
-    "percent",
-    "percentage",
-    "price",
-    "rate",
-    "ratio",
-    "score",
-)
-ADDITIVE_TOKENS = (
-    "amount",
-    "cost",
-    "income",
-    "order",
-    "profit",
-    "quantity",
-    "revenue",
-    "sales",
-    "turnover",
-    "unit",
-    "volume",
 )
 
 
@@ -68,14 +28,12 @@ class PrimarySeries:
 
 
 def is_identifier_column(df: pd.DataFrame, column: str) -> bool:
-    name = column.lower()
-    looks_like_id = (
-        name == "id"
-        or name.endswith("_id")
-        or any(word in name for word in ("code", "reference", "number"))
-    )
-    return looks_like_id and (
-        len(df) == 0 or df[column].nunique(dropna=True) / len(df) >= 0.5
+    """Use profile shape, not business vocabulary, for legacy identifier filtering."""
+    return bool(
+        column in df
+        and not pd.api.types.is_numeric_dtype(df[column])
+        and len(df) > 0
+        and df[column].nunique(dropna=True) / len(df) >= 0.98
     )
 
 
@@ -99,31 +57,8 @@ def is_numeric_measure(df: pd.DataFrame, column: str) -> bool:
 
 
 def aggregation_for_measure(measure: str) -> str:
-    lowered = measure.lower()
-    if any(token in lowered for token in AVERAGE_TOKENS):
-        return "mean"
-    if any(token in lowered for token in ADDITIVE_TOKENS):
-        return "sum"
+    """Use a conservative generic fallback when no model KPI definition exists."""
     return "sum"
-
-
-def _measure_score(measure: str) -> int:
-    lowered = measure.lower()
-    if lowered.startswith("is_") or lowered.endswith("_id") or lowered == "id":
-        return -1_000
-    priorities = (
-        (("net_revenue", "net_sales", "net_income"), 1_000),
-        (("profit", "earnings"), 950),
-        (("gross_revenue", "revenue", "turnover", "sales"), 900),
-        (("quantity", "volume", "orders", "units"), 750),
-        (("cost", "amount"), 650),
-        (("price",), 400),
-        (("discount", "pct", "percent", "rate", "ratio"), 250),
-    )
-    return max(
-        (score for tokens, score in priorities if any(token in lowered for token in tokens)),
-        default=500,
-    )
 
 
 def ranked_measures(
@@ -139,11 +74,7 @@ def ranked_measures(
         column = str(value)
         if column not in candidates and is_numeric_measure(df, column):
             candidates.append(column)
-    positions = {value: index for index, value in enumerate(candidates)}
-    return sorted(
-        (value for value in candidates if _measure_score(value) >= 0),
-        key=lambda value: (-_measure_score(value), positions[value]),
-    )
+    return candidates
 
 
 def selected_granularity(prepared: dict[str, Any]) -> TimeGranularity:
@@ -260,15 +191,7 @@ def is_temporal_dimension(
     column: str,
     prepared: dict[str, Any],
 ) -> bool:
-    lowered = column.lower()
     if column == prepared.get("date_column"):
-        return True
-    if lowered in TEMPORAL_DIMENSION_NAMES:
-        return True
-    if any(
-        lowered.endswith(suffix)
-        for suffix in ("_date", "_day", "_month", "_quarter", "_time", "_week", "_year")
-    ):
         return True
     profiles = (prepared.get("dataset_profile") or {}).get("column_profiles") or []
     profile = next(
@@ -279,12 +202,6 @@ def is_temporal_dimension(
 
 
 def value_format_for_measure(measure: str, prepared: dict[str, Any]) -> str:
-    lowered = measure.lower()
-    if any(token in lowered for token in ("pct", "percent", "percentage", "rate")):
-        return "percentage"
-    if detect_currency([measure]) or any(
-        token in lowered
-        for token in ("amount", "cost", "gbp", "price", "profit", "revenue", "sales")
-    ):
-        return "currency"
-    return "number"
+    formats = prepared.get("measure_formats") or {}
+    value_format = formats.get(measure) if isinstance(formats, dict) else None
+    return value_format if isinstance(value_format, str) else "number"

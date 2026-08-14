@@ -8,7 +8,6 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from app.core.currency import detect_currency
 from app.schemas.data_preparation import ColumnProfile, DatasetProfile
 from app.services.data.cleaning import _infer_column_type, _parse_dates_for_column
 
@@ -35,6 +34,7 @@ def _short_sample(value: Any) -> Any:
     if isinstance(safe, str):
         return safe[:MAX_SAMPLE_LENGTH]
     return safe
+
 
 def _profile_dataset(df: pd.DataFrame, business_description: str | None) -> DatasetProfile:
     column_profiles: list[ColumnProfile] = []
@@ -91,7 +91,7 @@ def _profile_dataset(df: pd.DataFrame, business_description: str | None) -> Data
             )
         )
 
-    profile = DatasetProfile(
+    return DatasetProfile(
         row_count=int(len(df)),
         column_count=int(len(df.columns)),
         column_profiles=column_profiles,
@@ -99,7 +99,4 @@ def _profile_dataset(df: pd.DataFrame, business_description: str | None) -> Data
         candidate_numeric_columns=numeric_columns,
         candidate_categorical_columns=categorical_columns,
         business_description=(business_description or None),
-    )
-    return profile.model_copy(
-        update={"currency": detect_currency(item.name for item in profile.column_profiles)}
     )

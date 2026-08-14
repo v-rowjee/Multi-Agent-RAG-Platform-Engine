@@ -1,7 +1,6 @@
 """KPI and trend specialist. The LLM plans definitions; pandas calculates values."""
 from __future__ import annotations
 
-import asyncio
 import ast
 import math
 import re
@@ -16,11 +15,9 @@ from app.core.model_policy import ModelExecutionStatus, agent_model_usage
 from app.core.prompt_loader import render_agent_prompts
 from app.schemas.specialists import (
     KPIDefinition,
-    KPIRequest,
     KPIResult,
     KPITrendOutput,
     KPITrendPlan,
-    KPIValueDefinition,
     TrendDefinition,
     TrendPoint,
     TrendSeries,
@@ -68,7 +65,16 @@ class ParsedKPIQuery:
 def _columns_metadata(prepared: dict[str, Any]) -> list[dict[str, Any]]:
     profiles = (prepared.get("dataset_profile") or {}).get("column_profiles") or []
     return [
-        {"name": item.get("name"), "type": item.get("inferred_type"), "unique_count": item.get("unique_count")}
+        {
+            "name": item.get("name"),
+            "type": item.get("inferred_type"),
+            "unique_count": item.get("unique_count"),
+            "sample_values": item.get("sample_values"),
+            "numeric_minimum": item.get("numeric_minimum"),
+            "numeric_maximum": item.get("numeric_maximum"),
+            "numeric_mean": item.get("numeric_mean"),
+            "numeric_median": item.get("numeric_median"),
+        }
         for item in profiles if isinstance(item, dict)
     ][:80]
 
@@ -78,6 +84,7 @@ def _planning_payload(prepared: dict[str, Any]) -> dict[str, Any]:
     return {
         "columns": _columns_metadata(prepared), "row_count": profile.get("row_count"),
         "primary_measures": prepared.get("primary_measures") or [],
+        "measure_formats": prepared.get("measure_formats") or {},
         "dimension_candidates": prepared.get("dimension_candidates") or [],
         "date_column": prepared.get("date_column"),
         "temporal_profile": prepared.get("temporal_profile") or {"inferred_frequency": prepared.get("time_granularity")},
@@ -107,28 +114,6 @@ async def _request_plan(prepared: dict[str, Any]) -> KPITrendPlan:
             f"The KPI plan must contain exactly {MAX_KPIS} KPI requests."
         )
     return plan
-
-
-async def _request_kpi_value_definition(
-    prepared: dict[str, Any],
-    request: KPIRequest,
-) -> KPIValueDefinition:
-    """Resolve one KPI request without allowing the model to calculate its value."""
-    prompts = render_agent_prompts(
-        "multi/kpi_trend",
-        "kpi_value",
-        payload=_planning_payload(prepared),
-        kpi=request.model_dump(mode="json"),
-    )
-    return await request_structured(
-        policy=agent_model_policy("kpi_trend"),
-        response_model=KPIValueDefinition,
-        schema_name="kpi_value_definition",
-        messages=[
-            {"role": "system", "content": prompts.system},
-            {"role": "user", "content": prompts.user},
-        ],
-    )
 
 
 def _is_numeric(df: pd.DataFrame, column: str) -> bool:
@@ -375,40 +360,6 @@ def _valid_plan(
                 item = item.model_copy(update={"aggregation": expected})
         used.add(item.id); trends.append(item)
     return kpis, trends, warnings
-
-
-async def _resolve_kpis(
-    prepared: dict[str, Any],
-    requests: list[KPIRequest],
-) -> tuple[list[KPIDefinition], list[str]]:
-    """Run every focused KPI request independently before pandas calculates it."""
-    definitions: list[KPIDefinition] = []
-    warnings: list[str] = []
-    responses = await asyncio.gather(
-        *[_request_kpi_value_definition(prepared, request) for request in requests[:MAX_KPIS]],
-        return_exceptions=True,
-    )
-    for request, response in zip(requests[:MAX_KPIS], responses, strict=True):
-        if isinstance(response, BaseException):
-            warnings.append(f"Could not resolve KPI `{request.id}`: {response}")
-            continue
-        definitions.append(
-            KPIDefinition(
-                id=request.id,
-                title=(
-                    response.title
-                    if response.title == request.title
-                    else request.title
-                ),
-                query=response.query,
-                fallback_value=response.fallback_value,
-                trend_kind=response.trend_kind,
-                trend_text=response.trend_text,
-                measure="",
-                aggregation="",
-            )
-        )
-    return definitions, warnings
 
 
 def _ensure_core_definitions(
@@ -686,17 +637,12 @@ class KPITrendAgent:
         warnings: list[str] = []
         try:
             proposed = await _request_plan(prepared_dataset)
-            proposed_kpis, resolution_warnings = await _resolve_kpis(
-                prepared_dataset,
-                proposed.kpis,
-            )
             kpi_definitions, trends, validation_warnings = _valid_plan(
-                proposed_kpis,
+                proposed.kpis,
                 proposed.trends,
                 df,
                 prepared_dataset,
             )
-            warnings.extend(resolution_warnings)
             warnings.extend(validation_warnings)
             if not kpi_definitions and not trends:
                 raise KPITrendError("LLM plan has no valid definitions.")
