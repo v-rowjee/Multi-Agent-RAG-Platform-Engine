@@ -1,321 +1,372 @@
-# Graph Report - C:\Users\Ved\OneDrive - Nottingham Trent University\MMP\Implementation\Single-Agent-RAG-Platform-Backend  (2026-07-28)
+# Graph Report - C:\Users\Ved\OneDrive - Nottingham Trent University\MMP\Implementation\Multi-Agent-RAG-Platform-Engine  (2026-08-14)
 
 ## Corpus Check
-- 122 files · ~57,690 words
+- 133 files · ~68,012 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 1456 nodes · 4314 edges · 80 communities (60 shown, 20 thin omitted)
-- Extraction: 90% EXTRACTED · 10% INFERRED · 0% AMBIGUOUS · INFERRED: 449 edges (avg confidence: 0.53)
+- 1633 nodes · 4740 edges · 97 communities (68 shown, 29 thin omitted)
+- Extraction: 90% EXTRACTED · 10% INFERRED · 0% AMBIGUOUS · INFERRED: 474 edges (avg confidence: 0.53)
 - Token cost: 0 input · 0 output
 
 ## Community Hubs (Navigation)
-- Dashboard Generation
-- Multi-Agent Chat
-- LLM Agent Policy
-- Application Configuration
-- Analysis Orchestration
-- Single-Agent Intelligence
-- Agent State Management
-- Insight Synthesis
-- Application Services
-- LangGraph Analysis Flow
-- Shared Domain Models
-- Deterministic Analytics
-- Retrieval Preparation
-- Anomaly Detection
-- Dashboard Assembly
-- Data Cleaning
-- Dataset Documents
-- Chronos Forecasting
-- API Request Schemas
-- Session Exceptions
-- Dashboard Validation
-- Business Intelligence Facade
-- Dataset Reanalysis
-- Dataset Profiling
-- Workspace Integration Tests
-- Analysis API Routes
-- Supabase Gateway
-- Preparation Planning
-- Data Preparation Tests
-- Dataset File Service
-- Multi-Agent Data Preparation
-- Embedding Service
-- Single-Agent Tests
-- Preparation Schemas
+- Anomaly Detection Agent
+- Grounded Chat Agent
+- Analysis API Endpoints
+- Model Provider Adapters
+- Workflow Orchestration Planning
+- Runtime Configuration Policies
+- Retrieval Document Preparation
+- Forecasting Agent
+- Chat Service Contracts
+- Insight Synthesis Agent
+- Application Service Facade
+- Deterministic Analytics Engine
+- Dashboard Generation Agent
+- Chat Application Service
+- Single Agent Pipeline
+- Analysis API Errors
+- Supabase Vector Storage
+- Chronos Forecasting Service
+- Multi Agent Integration Tests
+- Data Persistence Models
+- Dataset Preparation Profiling
 - Analysis Repository
-- In-Memory Storage
-- Authentication API
-- RAG Configuration
-- Dataset Index Transaction
-- Legacy Dataset Storage
-- Reanalysis Persistence
-- Chat API Routes
-- Analytics Unit Tests
-- RAG Indexing Service
-- Dashboard Repository
-- Supabase Vector Store
-- Chat Test Doubles
-- Session Processing Storage
-- Backend Architecture Docs
-- RAG Pipeline Docs
-- Supabase Workspace Docs
-- Multi-Agent Package
-- Single-Agent Package
+- Workspace Lifecycle Service
+- Dataset Cleaning Service
+- Analysis Persistence Service
+- Synthetic Data Generation
+- Multi Agent Data Preparation
+- Preparation Transformation Tests
+- Analysis Service Routing
+- Single Agent Implementation
+- RAG Retrieval Service
+- Embedding Model Service
+- Analysis Service Tests
+- Analytics Pipeline Tests
+- Single Agent Tests
+- Chat Answer Pipeline
+- In Memory Storage
+- Session Processing Tests
+- Authentication Dependencies
+- Graph Node Adapters
+- Data Preparation Schemas
+- Temporal Data Profiling
+- Application Startup Routing
+- Legacy Database Adapter
+- Authentication Tests
+- Dataset Indexing Service
+- Reanalysis State Management
+- Supabase Storage Gateway
+- Dataset Profiling Service
+- Multi Agent Data Flow
+- Single Agent Test Double
+- Pipeline Selection Logic
+- Backend Architecture Overview
+- Dashboard Retrieval Flow
+- Pipeline Status Tests
+- Output Join Results
+- Multi Agent Package
+- Single Agent Package
 - Workflow Graph Package
-- Orchestration Package
 - Graph Node Package
-- Embedding Package
+- Embedding Adapter Package
 - Indexing Package
 - RAG Retrieval Package
 - Data Service Package
 - Forecasting Package
-- Persistence Package
-- End-to-End Tests
+- Persistence Service Package
+- Orchestration Package
+- KPI Trend Definitions
+- Python Dependencies
+- End To End Tests
 - Orchestration Integration Tests
 - Persistence Integration Tests
 - Retrieval Integration Tests
-- Analysis Service Tests
+- Analysis Service Unit Tests
+- Shared Type Utilities
+- Shared Type Utilities
+- Shared Type Utilities
+- Shared Type Utilities
+- Agent Name
+- Shared Type Utilities
+- Shared Type Utilities
+- Shared Type Utilities
+- Shared Type Utilities
+- Chronos Forecasting Engine
 
 ## God Nodes (most connected - your core abstractions)
-1. `DatasetRecord` - 115 edges
-2. `StrictModel` - 77 edges
-3. `Settings` - 73 edges
-4. `DashboardResponse` - 62 edges
-5. `AnalysisSessionRecord` - 53 edges
-6. `RetrievedDocument` - 52 edges
-7. `BusinessIntelligenceAgent` - 50 edges
-8. `DeterministicAnalytics` - 49 edges
-9. `DatasetFileService` - 48 edges
-10. `AnalysisRepository` - 48 edges
+1. `DatasetRecord` - 126 edges
+2. `StrictModel` - 79 edges
+3. `Settings` - 72 edges
+4. `DashboardResponse` - 64 edges
+5. `BusinessIntelligenceService` - 64 edges
+6. `DatasetFileService` - 62 edges
+7. `AnalysisSessionRecord` - 57 edges
+8. `RetrievedDocument` - 56 edges
+9. `DeterministicAnalytics` - 54 edges
+10. `BusinessIntelligenceAgent` - 52 edges
 
 ## Surprising Connections (you probably didn't know these)
-- `test_synthesis_fallback_is_grounded_and_has_three_actions()` --calls--> `_fallback()`  [EXTRACTED]
-  tests/unit/agents/test_dashboard_quality.py → app/agents/multi/insight_synthesis.py
+- `test_eleven_year_monthly_history_forecasts_thirty_three_months()` --calls--> `_forecast_horizon()`  [EXTRACTED]
+  tests/unit/agents/test_insight_synthesis.py → app/agents/multi/forecasting.py
 - `DummySingleAgent` --uses--> `CurrentUser`  [INFERRED]
   tests/end_to_end/test_single_agent_pipeline.py → app/core/auth.py
 - `InMemoryStorage` --uses--> `CurrentUser`  [INFERRED]
   tests/end_to_end/test_single_agent_pipeline.py → app/core/auth.py
 - `full_flow()` --indirect_call--> `get_current_user()`  [INFERRED]
   tests/end_to_end/test_single_agent_pipeline.py → app/core/auth.py
-- `WorkspaceStorage` --uses--> `Settings`  [INFERRED]
+- `WorkspaceRag` --uses--> `Settings`  [INFERRED]
   tests/end_to_end/test_multi_agent_pipeline.py → app/core/config.py
 
 ## Import Cycles
 - None detected.
 
 ## Hyperedges (group relationships)
-- **Retrieval Flow** — readme_dataset_workspace, readme_retrieval_index, readme_retrieval_preparation, readme_bge_small_embedding [EXTRACTED 1.00]
+- **Multi-agent analysis data and output flow** — multi_agent_analysis_pipeline, pandas_dataframe, dashboard_generation, retrieval_preparation, output_join [EXTRACTED 1.00]
+- **KPI definition, calculation, and trend rendering** — kpi_value_definition, kpi_trend_agent, kpi_trend_indicator_output, dashboard_generation_agent [EXTRACTED 1.00]
+- **Simplified dashboard-to-retrieval finalization flow** — dashboard_generation_agent, retrieval_preparation_agent, workflow_finalization_node [EXTRACTED 1.00]
 
-## Communities (80 total, 20 thin omitted)
+## Communities (97 total, 29 thin omitted)
 
-### Community 0 - "Dashboard Generation"
+### Community 0 - "Anomaly Detection Agent"
 Cohesion: 0.06
-Nodes (104): _aggregate_grouped(), _build_dashboard(), _build_supporting_chart(), _chart_candidates(), dashboard_generation_node(), DashboardGenerationAgent, _dataset_summary(), _dedupe_selected() (+96 more)
+Nodes (108): _aggregate(), anomaly_detection_node(), AnomalyDetectionAgent, AnomalyDetectionError, _apply_interpretations(), _classify_severities(), _detect(), _ensure_primary_temporal_analysis() (+100 more)
 
-### Community 1 - "Multi-Agent Chat"
-Cohesion: 0.05
-Nodes (53): ChatAgent, _compact_context(), _document_source_ids(), Grounded chat generation over session-scoped retrieval evidence only., _request_draft(), _validated_source_ids(), build_chat_graph(), ChatGraph (+45 more)
-
-### Community 2 - "LLM Agent Policy"
+### Community 1 - "Grounded Chat Agent"
 Cohesion: 0.06
-Nodes (67): ABC, AgentModelPolicy, _assistant_content(), create_chat_model(), _GroqAdapter, InvalidProviderResponse, _is_retryable_provider_error(), _openrouter_extra_body() (+59 more)
+Nodes (56): ChatAgent, _compact_context(), _document_source_ids(), Grounded chat generation over session-scoped retrieval evidence only., _request_draft(), _validated_source_ids(), build_chat_graph(), ChatGraph (+48 more)
 
-### Community 3 - "Application Configuration"
+### Community 2 - "Analysis API Endpoints"
 Cohesion: 0.06
-Nodes (69): _agent_policy(), ChunkingPolicy, EmbeddingPolicy, _forecasting_policy(), ForecastingPolicy, load_rag_config(), load_runtime_config(), _mapping() (+61 more)
+Nodes (73): get_active_dataset(), get_dashboard(), get_dataset_preview(), Any, AuthenticatedUser, BackgroundTasks, get, post (+65 more)
 
-### Community 4 - "Analysis Orchestration"
+### Community 3 - "Model Provider Adapters"
 Cohesion: 0.07
-Nodes (56): _as_positive_int(), build_orchestration_context(), _capability_gated_plan(), detect_analysis_capabilities(), _deterministic_routing_plan(), _max_orchestration_payload_bytes(), orchestration_request_size(), OrchestrationPayloadTooLarge (+48 more)
+Nodes (64): ABC, AgentModelPolicy, _assistant_content(), create_chat_model(), _GroqAdapter, InvalidProviderResponse, _is_retryable_provider_error(), _openrouter_extra_body() (+56 more)
 
-### Community 5 - "Single-Agent Intelligence"
+### Community 4 - "Workflow Orchestration Planning"
+Cohesion: 0.07
+Nodes (58): _as_positive_int(), build_orchestration_context(), _capability_gated_plan(), detect_analysis_capabilities(), _deterministic_routing_plan(), _max_orchestration_payload_bytes(), orchestration_request_size(), OrchestrationPayloadTooLarge (+50 more)
+
+### Community 5 - "Runtime Configuration Policies"
+Cohesion: 0.07
+Nodes (65): ChunkingPolicy, EmbeddingPolicy, _get_agent_policy(), get_cors_allowed_origins(), _get_float(), _get_int(), get_rag_config(), get_runtime_config() (+57 more)
+
+### Community 6 - "Retrieval Document Preparation"
+Cohesion: 0.08
+Nodes (34): _add(), dashboard_retrieval_documents(), _document_id(), Any, DataFrame, Deterministically prepare compact, authoritative retrieval documents., Turn the saved dashboard into authoritative chat evidence. The dashboard can…, _raw_row_documents() (+26 more)
+
+### Community 7 - "Forecasting Agent"
 Cohesion: 0.10
-Nodes (30): DatasetAlreadyExistsError, InvalidUploadError, Exception, Shared domain exceptions and stable HTTP error mappings., Raised when a user attempts to create a second active workspace., Raised when uploaded dataset content cannot be accepted., Application logging configuration., Dataset and session indexing application service. (+22 more)
+Nodes (45): _fallback(), _fallback_forecast(), _forecast_horizon(), forecasting_node(), ForecastingAgent, ForecastingError, _frequency(), _granularity() (+37 more)
 
-### Community 6 - "Agent State Management"
-Cohesion: 0.08
-Nodes (15): AgentState, BusinessIntelligenceAgent, DraftAction, Narrative, Any, BaseModel, DataFrame, Series (+7 more)
+### Community 8 - "Chat Service Contracts"
+Cohesion: 0.12
+Nodes (29): Settings, Protocol, VectorStore, ApiMessage, Business-intelligence chat orchestration and message persistence., DashboardAssembler, Pure and near-pure dashboard assembly operations., Business-intelligence application facade implementation. Detailed parsing,… (+21 more)
 
-### Community 7 - "Insight Synthesis"
+### Community 9 - "Insight Synthesis Agent"
 Cohesion: 0.09
-Nodes (43): _compact(), _deterministic_recommendations(), _deterministic_summary(), _fallback(), insight_synthesis_node(), InsightSynthesisAgent, _limitations(), _number() (+35 more)
+Nodes (41): _compact(), _deterministic_recommendations(), _deterministic_summary(), _fallback(), insight_synthesis_node(), InsightSynthesisAgent, _limitations(), _number() (+33 more)
 
-### Community 8 - "Application Services"
-Cohesion: 0.09
-Nodes (24): get_settings(), Settings, BusinessIntelligenceService, Compatibility boundary retaining the established public import path., _Facade, UploadFile, test_active_workspace_can_add_and_remove_individual_datasets(), test_batch_validation_rejects_duplicate_content_before_persistence() (+16 more)
+### Community 10 - "Application Service Facade"
+Cohesion: 0.10
+Nodes (16): get_analysis_graph(), Compile and retain the production graph on its first pipeline run., DashboardResponse, model_validator, BusinessIntelligenceService, _multi_agent_graph(), Any, Create a workspace or append files to the user's active one. (+8 more)
 
-### Community 9 - "LangGraph Analysis Flow"
-Cohesion: 0.08
-Nodes (37): build_analysis_graph(), StateNode, LangGraph foundation for the multi-agent business intelligence workflow., Build the workflow through specialist analysis and output fan-in., generic_cleaning_node(), Any, Generic-cleaning graph node., Adapt the existing generic cleaner for use as a LangGraph node. (+29 more)
+### Community 11 - "Deterministic Analytics Engine"
+Cohesion: 0.11
+Nodes (5): DeterministicAnalytics, load_dataframe(), DataFrame, Series, CalculatedEvidence
 
-### Community 10 - "Shared Domain Models"
+### Community 12 - "Dashboard Generation Agent"
+Cohesion: 0.14
+Nodes (39): _aggregate_grouped(), _build_dashboard(), _build_supporting_chart(), _chart_candidates(), dashboard_generation_node(), DashboardGenerationAgent, _dataset_summary(), _dedupe_selected() (+31 more)
+
+### Community 13 - "Chat Application Service"
+Cohesion: 0.10
+Nodes (12): ChatResponse, BusinessIntelligenceChatService, Any, Answer supported aggregate questions directly from workspace data., Run the single-agent chat mode against the entire active workspace., Return chat model metadata in the public API schema., Load the single-agent stack only for a single-agent chat request., _single_agent() (+4 more)
+
+### Community 14 - "Single Agent Pipeline"
+Cohesion: 0.13
+Nodes (7): BusinessIntelligenceAgent, Any, DataFrame, Series, Compact BI pipeline with deterministic final schema construction., Compile the single-agent workflow only when it is first used., infer_date_granularity()
+
+### Community 15 - "Analysis API Errors"
+Cohesion: 0.14
+Nodes (15): DatasetAlreadyExistsError, InvalidUploadError, Exception, Shared domain exceptions and stable HTTP error mappings., Raised when a user attempts to create a second active workspace., Raised when uploaded dataset content cannot be accepted., Framework-neutral upload content passed into application services., UploadCandidate (+7 more)
+
+### Community 16 - "Supabase Vector Storage"
+Cohesion: 0.11
+Nodes (14): Exception, JsonDict, Supabase-backed vector store for transactional indexing and retrieval., Replace a dataset index in one PostgreSQL transaction., Upsert first and remove stale rows last so failures retain an index., SupabaseVectorStore, SupabaseGateway, AtomicIndexClient (+6 more)
+
+### Community 17 - "Chronos Forecasting Service"
 Cohesion: 0.12
-Nodes (38): BaseModel, Shared Pydantic primitives and domain aliases., Forbid undeclared fields at internal structured-output boundaries., StrictModel, CategoricalChart, ChartAxis, ChartLayout, ChartSeries (+30 more)
+Nodes (17): ChronosForecast, ChronosService, ChronosServiceError, Any, DataFrame, RuntimeError, Series, Timestamp (+9 more)
 
-### Community 11 - "Deterministic Analytics"
-Cohesion: 0.12
-Nodes (5): CalculatedEvidence, DeterministicAnalytics, load_dataframe(), DataFrame, Series
+### Community 18 - "Multi Agent Integration Tests"
+Cohesion: 0.11
+Nodes (8): Any, UploadFile, test_active_workspace_can_add_and_remove_individual_datasets(), test_batch_validation_rejects_duplicate_content_before_persistence(), test_mixed_schema_batch_creates_one_workspace_and_uses_every_dataset(), upload(), WorkspaceRag, WorkspaceStorage
 
-### Community 12 - "Retrieval Preparation"
-Cohesion: 0.12
-Nodes (25): _add(), dashboard_retrieval_documents(), _document_id(), Any, Deterministically prepare compact, authoritative retrieval documents., Turn the saved dashboard into authoritative chat evidence. The dashboard can…, _raw_row_documents(), retrieval_preparation_node() (+17 more)
+### Community 19 - "Data Persistence Models"
+Cohesion: 0.11
+Nodes (7): Any, DataFrame, Path, Build the one normalized DataFrame shared by both pipeline modes., Adapt a workspace to the single agent's temporary CSV contract., DatasetInspection, Any
 
-### Community 13 - "Anomaly Detection"
-Cohesion: 0.16
-Nodes (31): _aggregate(), anomaly_detection_node(), AnomalyDetectionAgent, AnomalyDetectionError, _detect(), _ensure_primary_temporal_analysis(), _fallback(), _frequency() (+23 more)
-
-### Community 14 - "Dashboard Assembly"
-Cohesion: 0.16
-Nodes (11): ApiMessage, DashboardAssembler, Any, DatasetInspection, PipelineExecution, AnalysisPipelineRunner, Any, DatasetRecord (+3 more)
-
-### Community 15 - "Data Cleaning"
-Cohesion: 0.14
-Nodes (25): _convert_dates(), _convert_numeric(), _generic_clean_csv(), _infer_column_type(), _is_date_candidate_name(), _normalise_column_name(), _normalise_columns(), _parse_dates_for_column() (+17 more)
-
-### Community 16 - "Dataset Documents"
-Cohesion: 0.24
-Nodes (7): DatasetDocumentBuilder, Any, DataFrame, Series, Split on readable boundaries while enforcing the configured limit., Build bounded raw-row evidence for either pipeline mode., RagDocument
-
-### Community 17 - "Chronos Forecasting"
-Cohesion: 0.14
-Nodes (16): ChronosForecast, ChronosService, ChronosServiceError, Any, DataFrame, RuntimeError, Series, Lazy, cached adapter for the self-hosted Chronos-2 forecasting model. (+8 more)
-
-### Community 18 - "API Request Schemas"
-Cohesion: 0.16
-Nodes (10): AgentModelMetadata, ChatMessage, ChatRequest, ChatResponse, BaseModel, A configured model assignment safe for public API responses., BusinessIntelligenceChatService, Any (+2 more)
-
-### Community 19 - "Session Exceptions"
-Cohesion: 0.20
-Nodes (7): Raised when an analysis session does not exist or is not accessible., SessionNotFoundError, Any, WorkspaceService, AnalysisSessionRecord, Repository, test_load_workspace_enforces_user_ownership()
-
-### Community 20 - "Dashboard Validation"
-Cohesion: 0.20
-Nodes (7): DashboardResponse, model_validator, AnalysisExecutionPersistenceService, Any, Exception, _dashboard_response(), test_persistence_sanitizers_remove_temporary_paths_recursively()
-
-### Community 21 - "Business Intelligence Facade"
-Cohesion: 0.16
-Nodes (5): BusinessIntelligenceService, Any, BackgroundTaskScheduler, Any, Protocol
-
-### Community 22 - "Dataset Reanalysis"
-Cohesion: 0.17
-Nodes (8): Any, Replace one dataset's retrieval index from either pipeline., Retrieve evidence through one session-scoped vector-search path., Retriever, BusinessIntelligenceAgentInput, Lock, QueryType, test_best_product_is_routed_to_deterministic_calculation()
-
-### Community 23 - "Dataset Profiling"
-Cohesion: 0.24
-Nodes (21): CapabilityFlags, ColumnProfile, DatasetProfile, PreparationPlan, SemanticRoleAssignment, _contains_any(), _detect_currency(), _deterministic_plan() (+13 more)
-
-### Community 24 - "Workspace Integration Tests"
-Cohesion: 0.14
-Nodes (3): Any, test_workspace_calculation_combines_matching_fields_from_every_dataset(), WorkspaceStorage
-
-### Community 25 - "Analysis API Routes"
-Cohesion: 0.29
-Nodes (18): add_datasets(), get_active_dataset(), get_dashboard(), get_dataset_preview(), Any, AuthenticatedUser, get, post (+10 more)
-
-### Community 26 - "Supabase Gateway"
-Cohesion: 0.19
-Nodes (8): SupabaseGateway, AtomicIndexClient, FallbackVectorStore, MissingRpcClient, MissingRpcRequest, RpcRequest, test_replace_document_chunks_keeps_legacy_projects_working(), test_replace_document_chunks_uses_one_atomic_rpc()
-
-### Community 27 - "Preparation Planning"
-Cohesion: 0.14
-Nodes (18): PreparationReport, TemporalProfile, _execute_plan(), AgentProvider, DataFrame, Path, TimeGranularity, Re-evaluate temporal capability after dates have been cleaned. Capability flags… (+10 more)
-
-### Community 28 - "Data Preparation Tests"
-Cohesion: 0.17
-Nodes (12): PreparationTransformation, _apply_formula(), LogCaptureFixture, MonkeyPatch, parametrize, Path, test_data_preparation_defaults_to_deterministic_planning(), test_formula_reconstruction_fills_only_missing_target_values() (+4 more)
-
-### Community 29 - "Dataset File Service"
-Cohesion: 0.20
-Nodes (5): DatasetFileService, Any, DataFrame, Path, test_inspection_preview_and_workspace_headers_share_file_owner()
-
-### Community 30 - "Multi-Agent Data Preparation"
+### Community 20 - "Dataset Preparation Profiling"
 Cohesion: 0.21
-Nodes (14): _compact_profile_payload(), data_preparation_node(), DataPreparationAgent, _plan_with_optional_enrichment(), AgentProvider, Any, Path, _request_plan() (+6 more)
+Nodes (23): CapabilityFlags, ColumnProfile, DatasetProfile, PreparationPlan, SemanticRoleAssignment, _contains_any(), _detect_currency(), _deterministic_plan() (+15 more)
 
-### Community 31 - "Embedding Service"
-Cohesion: 0.20
-Nodes (6): SentenceTransformerEmbeddingService, FakeSentenceTransformer, FakeVector, _install_fake_sentence_transformers(), test_embedding_service_does_not_load_model_for_empty_input(), test_embedding_service_lazily_encodes_documents_and_queries()
+### Community 21 - "Analysis Repository"
+Cohesion: 0.16
+Nodes (5): AnalysisRepository, DashboardRecord, Exception, JsonDict, DashboardStatus
 
-### Community 32 - "Single-Agent Tests"
+### Community 22 - "Workspace Lifecycle Service"
+Cohesion: 0.19
+Nodes (7): Raised when an analysis session does not exist or is not accessible., SessionNotFoundError, Any, Workspace loading, ownership, metadata, and lifecycle operations., WorkspaceService, Repository, test_load_workspace_enforces_user_ownership()
+
+### Community 23 - "Dataset Cleaning Service"
+Cohesion: 0.17
+Nodes (22): GenericCleaningResult, MissingValueSummary, _convert_dates(), _convert_numeric(), _generic_clean_csv(), generic_clean_dataframe(), _infer_column_type(), _is_date_candidate_name() (+14 more)
+
+### Community 24 - "Analysis Persistence Service"
+Cohesion: 0.22
+Nodes (8): AnalysisExecutionPersistenceService, Any, Exception, Load the single-agent stack only when indexing its retrieval documents., Build the durable chat corpus identically for either pipeline mode. Dashboard…, _single_agent(), AnalysisSessionRecord, test_persistence_sanitizers_remove_temporary_paths_recursively()
+
+### Community 25 - "Synthetic Data Generation"
+Cohesion: 0.22
+Nodes (22): DatetimeIndex, ndarray, allocated_overhead(), apply_business_events(), choose_branch(), choose_campaign(), choose_discount(), choose_payment_method() (+14 more)
+
+### Community 26 - "Multi Agent Data Preparation"
+Cohesion: 0.15
+Nodes (17): _compact_profile_payload(), data_preparation_node(), DataPreparationAgent, _plan_with_optional_enrichment(), AgentProvider, Any, DataFrame, _request_plan() (+9 more)
+
+### Community 27 - "Preparation Transformation Tests"
+Cohesion: 0.15
+Nodes (15): PreparationTransformation, _apply_formula(), _execute_plan(), AgentProvider, DataFrame, LogCaptureFixture, MonkeyPatch, parametrize (+7 more)
+
+### Community 28 - "Analysis Service Routing"
+Cohesion: 0.12
+Nodes (9): DataFrame, Build a workspace input once and retain its in-memory DataFrame., Return a compatibility payload for callers that still need bytes. New multi-…, DataFrame, The normalized data and routing profile needed for one chat scope., Build snapshots while upload/indexing already has file contents., WorkspaceCalculationSnapshot, DatasetRecord (+1 more)
+
+### Community 29 - "Single Agent Implementation"
+Cohesion: 0.18
+Nodes (10): DraftAction, Narrative, BaseModel, Application logging configuration., Optional best-effort warm-up for local inference models. Web processes must not…, Warm local models sequentially when explicitly requested., warm_local_models(), get_embedding_service() (+2 more)
+
+### Community 30 - "RAG Retrieval Service"
+Cohesion: 0.19
+Nodes (7): Any, Replace one dataset's retrieval index from either pipeline., Retrieve evidence through one session-scoped vector-search path., Retriever, IndexStatus, Lock, QueryType
+
+### Community 31 - "Embedding Model Service"
+Cohesion: 0.17
+Nodes (7): Load the embedding model once during startup., SentenceTransformerEmbeddingService, FakeSentenceTransformer, FakeVector, _install_fake_sentence_transformers(), test_embedding_service_does_not_load_model_for_empty_input(), test_embedding_service_lazily_encodes_documents_and_queries()
+
+### Community 32 - "Analysis Service Tests"
+Cohesion: 0.18
+Nodes (7): IndexingRag, Any, MonkeyPatch, test_dashboard_persists_before_background_retrieval_indexing(), test_failed_graph_returns_failed_dashboard_response(), test_multi_upload_uses_service_owned_persistence_and_never_single_agent(), UploadStorage
+
+### Community 33 - "Analytics Pipeline Tests"
+Cohesion: 0.27
+Nodes (12): BusinessIntelligenceAgentInput, _analytics(), _gbp_analytics(), Path, test_best_product_defaults_to_revenue_performance(), test_best_product_is_routed_to_deterministic_calculation(), test_deterministic_answer_takes_priority_over_retrieved_context(), test_forecast_uses_the_uploaded_dataset_currency() (+4 more)
+
+### Community 34 - "Single Agent Tests"
 Cohesion: 0.16
 Nodes (8): CurrentUser, DummyRagService, full_flow(), fixture, MonkeyPatch, SimpleNamespace, Records single-agent indexing without embedding or network access., test_other_users_cannot_access_an_existing_session()
 
-### Community 33 - "Preparation Schemas"
-Cohesion: 0.16
-Nodes (12): GenericCleaningResult, MissingValueSummary, normalize_semantic_role_assignments(), PreparedDatasetPackage, Any, model_validator, Dataset cleaning, profiling, and preparation schemas., Return canonical per-column assignments from current and legacy shapes. The… (+4 more)
+### Community 35 - "Chat Answer Pipeline"
+Cohesion: 0.18
+Nodes (5): AgentState, TypedDict, compact_profile_for_chat(), HumanMessage, SystemMessage
 
-### Community 36 - "Authentication API"
+### Community 37 - "Session Processing Tests"
+Cohesion: 0.22
+Nodes (6): PersistenceStorage, PipelineStorage, Any, test_multi_agent_workspace_is_temporary_and_not_session_storage(), test_persistence_stores_processing_metadata_without_temporary_paths(), WorkspaceGraph
+
+### Community 38 - "Authentication Dependencies"
 Cohesion: 0.21
 Nodes (10): Authentication dependencies shared by API routers., _claims_from_token(), get_current_user(), Any, HTTPAuthorizationCredentials, FastAPI authentication dependency for Supabase-issued access JWTs., Verify a Supabase JWT, including the SDK's legacy-HS256 fallback., _unauthorized() (+2 more)
 
-### Community 37 - "RAG Configuration"
-Cohesion: 0.24
-Nodes (6): get_rag_config(), get_embedding_service(), IndexStatus, Protocol, VectorStore, is_identifier_column()
+### Community 39 - "Graph Node Adapters"
+Cohesion: 0.23
+Nodes (9): generic_cleaning_node(), Any, Upload-cleaning confirmation graph node., Confirm that the DataFrame was cleaned and persisted during upload., Capability-routed specialist node adapters and failure boundaries., AnalysisState, TypedDict, Stable provenance for a DataFrame included in a workspace analysis. (+1 more)
 
-### Community 38 - "Dataset Index Transaction"
-Cohesion: 0.26
-Nodes (5): Exception, JsonDict, Replace a dataset index in one PostgreSQL transaction., Upsert first and remove stale rows last so failures retain an index., SupabaseVectorStore
+### Community 40 - "Data Preparation Schemas"
+Cohesion: 0.20
+Nodes (10): normalize_semantic_role_assignments(), PreparationReport, Any, model_validator, Dataset cleaning, profiling, and preparation schemas., Return canonical per-column assignments from current and legacy shapes. The…, Normalize safe, known JSON variants produced by planning models., TransformationOperation (+2 more)
 
-### Community 39 - "Legacy Dataset Storage"
+### Community 41 - "Temporal Data Profiling"
+Cohesion: 0.20
+Nodes (12): TemporalProfile, TimeGranularity, Re-evaluate temporal capability after dates have been cleaned. Capability flags…, _reconcile_temporal_capabilities(), _temporal_profile(), infer_time_granularity(), Series, TimeGranularity (+4 more)
+
+### Community 42 - "Application Startup Routing"
+Cohesion: 0.25
+Nodes (9): configure_logging(), Configure process logging once using a conservative default format., health(), lifespan(), get, Warm local inference models before the application accepts requests., ready(), root() (+1 more)
+
+### Community 43 - "Legacy Database Adapter"
 Cohesion: 0.20
 Nodes (4): LegacyDatasetsTable, LegacySchemaClient, SimpleNamespace, test_create_dataset_falls_back_when_metadata_columns_are_not_migrated()
 
-### Community 40 - "Reanalysis Persistence"
+### Community 44 - "Authentication Tests"
+Cohesion: 0.27
+Nodes (9): Auth, _ClaimsClient, _credentials(), HTTPAuthorizationCredentials, MonkeyPatch, parametrize, test_claims_from_token_reads_supabase_typed_dict_response(), test_get_current_user_rejects_missing_or_invalid_jwt() (+1 more)
+
+### Community 45 - "Dataset Indexing Service"
+Cohesion: 0.29
+Nodes (4): IndexingService, Any, Dataset and session indexing application service., Own indexing use cases independently from query retrieval.
+
+### Community 46 - "Reanalysis State Management"
 Cohesion: 0.29
 Nodes (4): Exception, Remove outputs that become stale when workspace files change., DatasetStatus, RagStatus
 
-### Community 41 - "Chat API Routes"
-Cohesion: 0.28
-Nodes (7): chat(), get_chat_history(), AuthenticatedUser, get, post, Authenticated chat endpoints., ChatHistoryResponse
-
-### Community 42 - "Analytics Unit Tests"
-Cohesion: 0.50
-Nodes (8): _analytics(), _gbp_analytics(), Path, test_best_product_defaults_to_revenue_performance(), test_deterministic_answer_takes_priority_over_retrieved_context(), test_forecast_uses_the_uploaded_dataset_currency(), test_generic_forecast_question_forecasts_next_year_revenue(), test_total_revenue_is_derived_from_price_and_volume()
-
-### Community 43 - "RAG Indexing Service"
-Cohesion: 0.39
-Nodes (3): IndexingService, Any, Own indexing use cases independently from query retrieval.
-
-### Community 45 - "Supabase Vector Store"
+### Community 47 - "Supabase Storage Gateway"
 Cohesion: 0.29
-Nodes (4): Supabase-backed vector store for transactional indexing and retrieval., Exception, Raised when the backend cannot use Supabase., SupabaseUnavailableError
+Nodes (4): SessionProcessingRecord, Low-level Supabase client and object-storage gateway., Raised when the backend cannot use Supabase., SupabaseUnavailableError
 
-### Community 46 - "Chat Test Doubles"
+### Community 48 - "Dataset Profiling Service"
+Cohesion: 0.36
+Nodes (7): _json_safe(), _profile_dataset(), Any, DataFrame, Deterministic dataset profiling., _short_sample(), test_deterministic_semantic_role_detection_uses_profile_statistics()
+
+### Community 49 - "Multi Agent Data Flow"
+Cohesion: 0.29
+Nodes (7): DashboardGenerationAgent, KPITrendAgent, Multi-agent analysis pipeline, pandas DataFrame, Parquet storage, RetrievalPreparationAgent, workflow_finalization_node
+
+### Community 50 - "Single Agent Test Double"
 Cohesion: 0.33
 Nodes (3): DummySingleAgent, Any, Deterministic stand-in for all single-agent LLM work.
 
-### Community 48 - "Backend Architecture Docs"
-Cohesion: 0.50
-Nodes (4): Analysis and Chat LangGraph Workflows, API Routes, Business Intelligence Backend, LangGraph
+### Community 51 - "Pipeline Selection Logic"
+Cohesion: 0.40
+Nodes (5): Any, Classify the completed multi-agent workflow state., Defer the single-agent/LangChain import until that pipeline is selected., _single_agent(), _workflow_status()
 
-### Community 49 - "RAG Pipeline Docs"
-Cohesion: 0.50
-Nodes (4): BGE Small Embedding Model, Multi-Agent Pipeline, Retrieval Preparation, Sentence Transformers
+### Community 52 - "Backend Architecture Overview"
+Cohesion: 0.40
+Nodes (5): Explicit dependency boundaries, Business-intelligence application service, LangGraph workflows, Business Intelligence Backend README, Supabase persistence
 
-### Community 50 - "Supabase Workspace Docs"
+### Community 53 - "Dashboard Retrieval Flow"
+Cohesion: 0.40
+Nodes (5): Dashboard generation, Multi-agent chat pipeline, Output join, RAG retrieval index, Retrieval preparation
+
+### Community 54 - "Pipeline Status Tests"
 Cohesion: 0.50
-Nodes (4): Dataset Workspace, Retrieval Index, Supabase, Supabase Python Client
+Nodes (4): Any, MonkeyPatch, _state(), test_llm_fallback_makes_an_otherwise_successful_workflow_partial()
+
+### Community 56 - "Output Join Results"
+Cohesion: 0.67
+Nodes (3): Dashboard, output_join_node, RetrievalPreparationOutput
 
 ## Knowledge Gaps
-- **6 isolated node(s):** `Business Intelligence Backend`, `Retrieval Index`, `Multi-Agent Pipeline`, `LangGraph`, `Supabase Python Client` (+1 more)
+- **14 isolated node(s):** `Business Intelligence Backend README`, `Python dependencies`, `Supabase persistence`, `Multi-agent analysis pipeline`, `Multi-agent chat pipeline` (+9 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **20 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **29 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `DashboardResponse` connect `Dashboard Validation` to `Dashboard Generation`, `Single-Agent Tests`, `In-Memory Storage`, `Single-Agent Intelligence`, `Agent State Management`, `Insight Synthesis`, `Application Services`, `LangGraph Analysis Flow`, `Shared Domain Models`, `Dashboard Assembly`, `Chat Test Doubles`, `API Request Schemas`, `Business Intelligence Facade`, `Workspace Integration Tests`?**
-  _High betweenness centrality (0.082) - this node is a cross-community bridge._
-- **Why does `Settings` connect `Application Services` to `Single-Agent Tests`, `Multi-Agent Chat`, `Application Configuration`, `In-Memory Storage`, `Single-Agent Intelligence`, `Legacy Dataset Storage`, `Supabase Vector Store`, `Dashboard Assembly`, `Chat Test Doubles`, `API Request Schemas`, `Dashboard Validation`, `Business Intelligence Facade`, `Workspace Integration Tests`, `Supabase Gateway`, `Dataset File Service`?**
-  _High betweenness centrality (0.078) - this node is a cross-community bridge._
-- **Why does `DatasetRecord` connect `Dashboard Assembly` to `Single-Agent Tests`, `Multi-Agent Chat`, `Analysis Repository`, `In-Memory Storage`, `Single-Agent Intelligence`, `Reanalysis Persistence`, `Application Services`, `Supabase Vector Store`, `Chat Test Doubles`, `API Request Schemas`, `Session Exceptions`, `Dashboard Validation`, `Business Intelligence Facade`, `Workspace Integration Tests`, `Supabase Gateway`, `Dataset File Service`?**
-  _High betweenness centrality (0.066) - this node is a cross-community bridge._
-- **Are the 31 inferred relationships involving `DatasetRecord` (e.g. with `BusinessIntelligenceChatService` and `DashboardAssembler`) actually correct?**
-  _`DatasetRecord` has 31 INFERRED edges - model-reasoned connections that need verification._
-- **Are the 70 inferred relationships involving `StrictModel` (e.g. with `CategoricalChart` and `ChartAxis`) actually correct?**
-  _`StrictModel` has 70 INFERRED edges - model-reasoned connections that need verification._
+- **Why does `DashboardResponse` connect `Application Service Facade` to `Analysis Service Tests`, `Analytics Pipeline Tests`, `Analysis API Endpoints`, `Chat Answer Pipeline`, `Single Agent Tests`, `In Memory Storage`, `Session Processing Tests`, `Forecasting Agent`, `Chat Service Contracts`, `Dashboard Generation Agent`, `Single Agent Pipeline`, `Multi Agent Integration Tests`, `Data Persistence Models`, `Single Agent Test Double`, `Analysis Persistence Service`, `Analysis Service Routing`, `Single Agent Implementation`?**
+  _High betweenness centrality (0.085) - this node is a cross-community bridge._
+- **Why does `DatasetRecord` connect `Analysis Service Routing` to `Analysis Service Tests`, `Grounded Chat Agent`, `Single Agent Tests`, `In Memory Storage`, `Session Processing Tests`, `Chat Service Contracts`, `Application Service Facade`, `Chat Application Service`, `Reanalysis State Management`, `Analysis API Errors`, `Supabase Vector Storage`, `Supabase Storage Gateway`, `Multi Agent Integration Tests`, `Data Persistence Models`, `Single Agent Test Double`, `Analysis Repository`, `Workspace Lifecycle Service`, `Analysis Persistence Service`?**
+  _High betweenness centrality (0.077) - this node is a cross-community bridge._
+- **Why does `Settings` connect `Chat Service Contracts` to `Analysis Service Tests`, `Grounded Chat Agent`, `Single Agent Tests`, `In Memory Storage`, `Runtime Configuration Policies`, `Session Processing Tests`, `Application Service Facade`, `Legacy Database Adapter`, `Authentication Tests`, `Chat Application Service`, `Supabase Storage Gateway`, `Supabase Vector Storage`, `Multi Agent Integration Tests`, `Single Agent Test Double`, `Analysis Persistence Service`?**
+  _High betweenness centrality (0.065) - this node is a cross-community bridge._
+- **Are the 32 inferred relationships involving `DatasetRecord` (e.g. with `BusinessIntelligenceChatService` and `DashboardAssembler`) actually correct?**
+  _`DatasetRecord` has 32 INFERRED edges - model-reasoned connections that need verification._
+- **Are the 74 inferred relationships involving `StrictModel` (e.g. with `CategoricalChart` and `ChartAxis`) actually correct?**
+  _`StrictModel` has 74 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 30 inferred relationships involving `Settings` (e.g. with `BusinessIntelligenceChatService` and `DashboardAssembler`) actually correct?**
   _`Settings` has 30 INFERRED edges - model-reasoned connections that need verification._
 - **Are the 25 inferred relationships involving `DashboardResponse` (e.g. with `DashboardGenerationAgent` and `AgentState`) actually correct?**
