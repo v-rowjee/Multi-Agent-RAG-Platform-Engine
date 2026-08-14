@@ -81,6 +81,10 @@ class SentenceTransformerReranker:
                 for document in documents[:limit]
             ]
 
+    def warm(self) -> None:
+        """Load the cross-encoder before it is needed by a chat request."""
+        self._model_instance()
+
     def _model_instance(self) -> Any:
         if self._model is None:
             with self._lock:

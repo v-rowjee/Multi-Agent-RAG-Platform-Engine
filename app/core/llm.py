@@ -20,7 +20,7 @@ from pydantic import BaseModel, SecretStr, ValidationError
 from app.core.config import AgentModelPolicy, AgentProvider, get_runtime_config
 
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-MAX_STRUCTURED_ATTEMPTS = 3
+MAX_STRUCTURED_ATTEMPTS = 2
 StructuredModel = TypeVar("StructuredModel", bound=BaseModel)
 logger = logging.getLogger(__name__)
 

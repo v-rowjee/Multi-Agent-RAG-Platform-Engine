@@ -14,7 +14,6 @@ if str(ROOT) not in sys.path:
 from app.agents.single.business_intelligence import BusinessIntelligenceAgent
 from app.rag.retrieval.retriever import DeterministicAnalytics, Retriever
 from app.schemas.api import BusinessIntelligenceAgentInput
-from app.schemas.specialists import DataframeQueryPlan
 
 def _analytics(tmp_path: Path) -> DeterministicAnalytics:
     data_path = tmp_path / "sales.csv"
@@ -108,38 +107,51 @@ def test_best_product_is_routed_to_deterministic_calculation() -> None:
     assert Retriever().route_query("Which product performed best?", profile) == "calculation"
 
 
-def test_dataframe_plan_filters_a_month_and_compares_the_previous_period(
+def test_implicit_monthly_revenue_question_is_calculated() -> None:
+    dataframe = pd.DataFrame(
+        {
+            "Year": [2024, 2024],
+            "Month": [4, 5],
+            "Net Revenue GBP": [25_025.78, 100.0],
+        }
+    )
+    profile = {
+        "summary": {
+            "measures": ["Net Revenue GBP"],
+            "dimensions": ["Year", "Month"],
+            "timeField": "Year",
+        }
+    }
+    query = "What was the net revenue for April 2024?"
+
+    result = DeterministicAnalytics(
+        BusinessIntelligenceAgentInput(
+            sessionId="test-session",
+            filePath="cached://workspace",
+            fileName="sales.csv",
+        ),
+        profile,
+        dataframe=dataframe,
+    ).calculate(query)
+
+    assert Retriever().route_query(query, profile) == "calculation"
+    assert result is not None and result.direct_answer is not None
+    assert "25,025.78" in result.direct_answer
+    assert "Year=2024, Month=4" in result.direct_answer
+
+
+def test_natural_language_calculations_support_median_and_distinct_count(
     tmp_path: Path,
 ) -> None:
-    data_path = tmp_path / "monthly_sales.csv"
-    pd.DataFrame(
-        {
-            "transaction_date": ["2024-12-15", "2025-01-04", "2025-01-22"],
-            "gross_revenue": [90, 100, 150],
-        }
-    ).to_csv(data_path, index=False)
-    analytics = DeterministicAnalytics(
-        BusinessIntelligenceAgentInput(
-            sessionId="monthly-session", filePath=str(data_path), fileName=data_path.name
-        ),
-        {"summary": {"measures": ["gross_revenue"], "dimensions": [], "timeField": "transaction_date"}},
-    )
+    analytics = _analytics(tmp_path)
 
-    result = analytics.execute_plan(
-        DataframeQueryPlan(
-            operation="sum",
-            measure="gross_revenue",
-            date_column="transaction_date",
-            year=2025,
-            month=1,
-            compare_previous_period=True,
-        )
-    )
+    median = analytics.calculate("What is the median Price_USD?")
+    distinct = analytics.calculate("How many distinct Product values are there?")
 
-    assert result is not None
-    assert "**250.00**" in result.direct_answer
-    assert "increased from **90.00** in December 2024" in result.direct_answer
-    assert ".dt.month.eq(1)" in result.direct_answer
+    assert median is not None
+    assert "Median Price USD: $19.50" in median.text
+    assert distinct is not None
+    assert "Distinct count of Product: 2" in distinct.text
 
 
 def test_deterministic_answer_takes_priority_over_retrieved_context(tmp_path: Path) -> None:

@@ -12,6 +12,7 @@ from time import perf_counter
 from typing import Callable
 
 from app.rag.embeddings.service import get_embedding_service
+from app.rag.retrieval.reranker import get_reranker
 from app.services.forecasting.chronos import chronos_service
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,7 @@ async def warm_local_models() -> None:
     models: tuple[tuple[str, Callable[[], None]], ...] = (
         ("chronos", chronos_service.warm),
         ("embedding", get_embedding_service().warm),
+        ("reranker", get_reranker().warm),
     )
     for name, warm in models:
         started_at = perf_counter()

@@ -298,15 +298,6 @@ def test_mixed_schema_batch_creates_one_workspace_and_uses_every_dataset() -> No
     assert selected is not None and selected.file_name == "sales.csv"
     assert ambiguous == []
 
-    calculation = service._workspace_calculation_response(
-        "What is the total revenue?",
-        datasets,
-    )
-    assert calculation is not None
-    assert "**100.00**" in calculation
-    assert "sales.csv" in calculation
-    assert "inventory.csv" in calculation
-
     service.reset_active_dataset(USER_ID)
     assert storage.sessions == {}
     assert storage.datasets == {}
@@ -335,54 +326,6 @@ def test_batch_validation_rejects_duplicate_content_before_persistence() -> None
     assert storage.sessions == {}
     assert storage.datasets == {}
     assert storage.files == {}
-
-
-def test_workspace_calculation_combines_matching_fields_from_every_dataset() -> None:
-    storage = WorkspaceStorage()
-    service = BusinessIntelligenceService(
-        storage=storage,  # type: ignore[arg-type]
-        settings=Settings("", "", bi_pipeline_mode="multi"),
-    )
-    session = storage.create_session(
-        session_id="workspace-session",
-        user_id=USER_ID,
-        description=None,
-    )
-    datasets: list[DatasetRecord] = []
-    for index, (file_name, content) in enumerate(
-        (
-            ("sme_gym_sales_2015_2025-1.csv", b"region,Revenue\nNorth,100\n"),
-            ("sme_gym_sales_2015_2025-2.csv", b"region,revenue\nSouth,200\n"),
-        ),
-        start=1,
-    ):
-        storage_path = f"{USER_ID}/{session.id}/dataset-{index}/{file_name}"
-        datasets.append(
-            storage.create_dataset(
-                dataset_id=f"dataset-{index}",
-                session_id=session.id,
-                user_id=USER_ID,
-                file_name=file_name,
-                storage_path=storage_path,
-                mime_type="text/csv",
-                file_size=len(content),
-                file_hash=f"hash-{index}",
-                description=None,
-                row_count=1,
-                column_count=2,
-            )
-        )
-        storage.upload_file(storage_path, content, "text/csv")
-
-    calculation = service._workspace_calculation_response(
-        "What was the total revenue?",
-        datasets,
-    )
-
-    assert calculation is not None
-    assert "**300.00**" in calculation
-    assert "sme_gym_sales_2015_2025-1.csv" in calculation
-    assert "sme_gym_sales_2015_2025-2.csv" in calculation
 
 
 def test_active_workspace_can_add_and_remove_individual_datasets() -> None:

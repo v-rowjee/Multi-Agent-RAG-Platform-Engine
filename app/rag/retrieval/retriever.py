@@ -18,7 +18,6 @@ from app.rag.embeddings.service import get_embedding_service
 from app.rag.models import CalculatedEvidence, IndexStatus, QueryType, RagDocument, RerankedDocument, RetrievedDocument
 from app.rag.retrieval.reranker import get_reranker
 from app.schemas.api import BusinessIntelligenceAgentInput
-from app.schemas.specialists import DataframeQueryPlan
 from app.rag.vector_store import VectorStore, vector_store
 
 
@@ -36,7 +35,6 @@ REVENUE_COLUMN_TERMS = (
     "sales value",
     "sales_value",
 )
-
 
 class Retriever:
     def __init__(self, storage: VectorStore | None = None) -> None:
@@ -496,7 +494,14 @@ class Retriever:
                 "bottom",
                 "best",
                 "performed best",
-                )
+            )
+        )
+        has_metric_question = any(
+            term in lowered
+            for term in ("revenue", "sales", "turnover", "profit", "amount", "income")
+        )
+        has_implicit_aggregate = bool(
+            re.search(r"\bwhat\s+(?:is|was|were)\b", lowered)
         )
         has_forecast = any(word in lowered for word in ("predict", "forecast", "project"))
         has_compare = any(word in lowered for word in ("compare", "versus", " vs ", "difference"))
@@ -506,7 +511,9 @@ class Retriever:
             return "mixed" if has_explain else "forecast"
         if has_calc and has_explain:
             return "mixed"
-        if has_calc or (mentions_column and any(word in lowered for word in ("how many", "how much"))):
+        if has_calc or (mentions_column and any(word in lowered for word in ("how many", "how much"))) or (
+            has_metric_question and has_implicit_aggregate
+        ):
             return "calculation"
         if has_compare:
             return "comparison"
@@ -535,26 +542,6 @@ class Retriever:
             logger.exception(
                 "Deterministic analytics failed session_id=%s",
                 agent_input.sessionId,
-            )
-            return None
-
-    def execute_dataframe_plan(
-        self,
-        agent_input: BusinessIntelligenceAgentInput,
-        profile: dict[str, Any],
-        plan: DataframeQueryPlan,
-        dataframe: pd.DataFrame | None = None,
-    ) -> CalculatedEvidence | None:
-        """Execute a validated natural-language dataframe plan."""
-        try:
-            return DeterministicAnalytics(
-                agent_input=agent_input,
-                profile=profile,
-                dataframe=dataframe,
-            ).execute_plan(plan)
-        except Exception:
-            logger.exception(
-                "Dataframe plan execution failed session_id=%s", agent_input.sessionId
             )
             return None
 
@@ -646,7 +633,11 @@ class DeterministicAnalytics:
         if not operation:
             return None
 
-        measure = self._query_measure(query)
+        measure = (
+            self._query_column(query, [*self.measures, *self.dimensions])
+            if operation == "distinct_count"
+            else self._query_measure(query)
+        )
         if operation == "count" and measure is None:
             return self._count_rows(query)
         if measure is None and operation in {"top", "bottom", "group_by"}:
@@ -660,13 +651,14 @@ class DeterministicAnalytics:
         if working.empty:
             return None
 
-        if operation in {"sum", "average", "minimum", "maximum"}:
+        if operation in {"sum", "average", "median", "minimum", "maximum"}:
             numeric = pd.to_numeric(working[measure], errors="coerce").dropna()
             if numeric.empty:
                 return None
             value = {
                 "sum": numeric.sum(),
                 "average": numeric.mean(),
+                "median": numeric.median(),
                 "minimum": numeric.min(),
                 "maximum": numeric.max(),
             }[operation]
@@ -686,6 +678,26 @@ class DeterministicAnalytics:
             )
             direct = (
                 f"**Answer:** The {label.lower()} {measure_label}{filter_text} across matching records is **{self._format_value(measure, value)}**.\n\n"
+                f"**Grounding:** {reasoning}"
+            )
+            return CalculatedEvidence(text=text, direct_answer=direct)
+
+        if operation == "distinct_count":
+            value = int(working[measure].dropna().nunique())
+            filter_text = self._filter_text(filters)
+            measure_label = self._measure_label(measure)
+            text = (
+                f"Calculated evidence:\n"
+                f"Distinct count of {measure_label}{filter_text}: {value:,}.\n"
+                f"Source fields: {self._source_fields([measure, *filters.keys()])}."
+            )
+            reasoning = self._calculation_reasoning(
+                f"{self._filtered_frame_query(filters)}; scoped[{measure!r}].dropna().nunique()",
+                [measure, *filters.keys()],
+                f"Counted distinct non-empty values in `{measure}` in `{self.agent_input.fileName}`",
+            )
+            direct = (
+                f"**Answer:** The distinct count of {measure_label}{filter_text} across matching records is **{value:,}**.\n\n"
                 f"**Grounding:** {reasoning}"
             )
             return CalculatedEvidence(text=text, direct_answer=direct)
@@ -742,129 +754,6 @@ class DeterministicAnalytics:
             return CalculatedEvidence(text=text, direct_answer=direct)
 
         return None
-
-    def execute_plan(self, plan: DataframeQueryPlan) -> CalculatedEvidence | None:
-        """Validate and execute a model-produced plan without evaluating code."""
-        if plan.measure is not None and plan.measure not in self.df.columns:
-            return None
-
-        if plan.group_by is not None and plan.group_by not in self.df.columns:
-            return None
-        if plan.date_column is not None and plan.date_column not in self.df.columns:
-            return None
-
-        filters: dict[str, str | int | float | bool] = {}
-        for item in plan.filters:
-            if item.column not in self.df.columns or item.column in filters:
-                return None
-            filters[item.column] = item.value
-        working = self._apply_filters(self.df, filters)
-        date_column = plan.date_column or self.date_field
-        if plan.year is not None or plan.month is not None:
-            if not date_column or date_column not in working.columns:
-                return None
-            dates = pd.to_datetime(working[date_column], errors="coerce")
-            mask = dates.notna()
-            if plan.year is not None:
-                mask &= dates.dt.year.eq(plan.year)
-            if plan.month is not None:
-                mask &= dates.dt.month.eq(plan.month)
-            working = working.loc[mask]
-        if working.empty:
-            return None
-
-        if plan.operation == "count":
-            value = len(working)
-            label = "Count"
-            pandas_expression = "len(scoped)"
-        else:
-            if not plan.measure:
-                return None
-            numeric = pd.to_numeric(working[plan.measure], errors="coerce")
-            if plan.operation in {"top", "bottom", "group_by"}:
-                if not plan.group_by:
-                    return None
-                grouped = pd.DataFrame({plan.group_by: working[plan.group_by], plan.measure: numeric}).dropna().groupby(plan.group_by)[plan.measure].sum()
-                if grouped.empty:
-                    return None
-                if plan.operation == "top":
-                    selected = grouped.nlargest(1)
-                elif plan.operation == "bottom":
-                    selected = grouped.nsmallest(1)
-                else:
-                    selected = grouped.nlargest(10)
-                value = "; ".join(f"{key}: {self._format_value(plan.measure, number)}" for key, number in selected.items())
-                label = {"top": "Top", "bottom": "Bottom", "group_by": "Breakdown"}[plan.operation]
-                pandas_expression = f"pd.to_numeric(scoped[{plan.measure!r}], errors='coerce').groupby(scoped[{plan.group_by!r}]).sum()"
-            else:
-                usable = numeric.dropna()
-                if usable.empty:
-                    return None
-                aggregate = {
-                    "sum": usable.sum,
-                    "average": usable.mean,
-                    "minimum": usable.min,
-                    "maximum": usable.max,
-                }.get(plan.operation)
-                if aggregate is None:
-                    return None
-                value = aggregate()
-                label = plan.operation.title()
-                pandas_expression = f"pd.to_numeric(scoped[{plan.measure!r}], errors='coerce').{self._pandas_aggregation(plan.operation)}()"
-
-        comparison_text = ""
-        if plan.compare_previous_period and plan.operation in {"sum", "average", "minimum", "maximum"}:
-            if not date_column or plan.year is None or plan.month is None or not plan.measure:
-                return None
-            previous_period = pd.Timestamp(year=plan.year, month=plan.month, day=1) - pd.DateOffset(months=1)
-            all_dates = pd.to_datetime(self._apply_filters(self.df, filters)[date_column], errors="coerce")
-            previous_rows = self._apply_filters(self.df, filters).loc[
-                all_dates.dt.year.eq(previous_period.year) & all_dates.dt.month.eq(previous_period.month)
-            ]
-            previous_values = pd.to_numeric(previous_rows[plan.measure], errors="coerce").dropna()
-            if not previous_values.empty:
-                previous_value = {
-                    "sum": previous_values.sum(),
-                    "average": previous_values.mean(),
-                    "minimum": previous_values.min(),
-                    "maximum": previous_values.max(),
-                }[plan.operation]
-                change = float(value) - float(previous_value)
-                direction = "increased" if change > 0 else "decreased" if change < 0 else "was unchanged"
-                comparison_text = (
-                    f" It {direction} from **{self._format_value(plan.measure, float(previous_value))}** "
-                    f"in {previous_period.strftime('%B %Y')}"
-                    + (f" by **{self._format_value(plan.measure, abs(change))}**." if change else ".")
-                )
-
-        period_parts = []
-        if plan.month is not None:
-            period_parts.append(pd.Timestamp(year=2000, month=plan.month, day=1).strftime("%B"))
-        if plan.year is not None:
-            period_parts.append(str(plan.year))
-        period = " ".join(period_parts)
-        scope = f" for {period}" if period else ""
-        if filters:
-            scope += self._filter_text(filters)
-        value_text = str(value) if isinstance(value, str) else self._format_value(plan.measure or "", float(value))
-        condition_parts = [f"df[{column!r}].eq({value!r})" for column, value in filters.items()]
-        if plan.year is not None:
-            condition_parts.append(f"pd.to_datetime(df[{date_column!r}], errors='coerce').dt.year.eq({plan.year})")
-        if plan.month is not None:
-            condition_parts.append(f"pd.to_datetime(df[{date_column!r}], errors='coerce').dt.month.eq({plan.month})")
-        scoped_query = "scoped = df" if not condition_parts else f"scoped = df[{' & '.join(condition_parts)}]"
-        fields = [item for item in [plan.measure, plan.group_by, date_column, *filters.keys()] if item]
-        reasoning = self._calculation_reasoning(
-            f"{scoped_query}; {pandas_expression}",
-            fields,
-            f"Executed the validated {plan.operation} plan against `{self.agent_input.fileName}`",
-        )
-        measure_label = self._measure_label(plan.measure) if plan.measure else "rows"
-        answer = f"The {label.lower()} {measure_label}{scope} is **{value_text}**.{comparison_text}"
-        return CalculatedEvidence(
-            text=f"Calculated evidence:\n{answer}\nSource fields: {self._source_fields(fields)}.",
-            direct_answer=f"**Answer:** {answer}\n\n**Grounding:** {reasoning}",
-        )
 
     def _count_rows(self, query: str) -> CalculatedEvidence | None:
         filters = self._filters(query, exclude=set())
@@ -970,7 +859,7 @@ class DeterministicAnalytics:
 
     @staticmethod
     def _pandas_aggregation(operation: str) -> str:
-        return {"average": "mean"}.get(operation, operation)
+        return {"average": "mean", "distinct_count": "nunique"}.get(operation, operation)
 
     @staticmethod
     def _calculation_reasoning(
@@ -986,6 +875,8 @@ class DeterministicAnalytics:
         )
 
     def _operation(self, lowered: str) -> str | None:
+        if any(phrase in lowered for phrase in ("distinct count", "unique count", "how many unique", "how many distinct")):
+            return "distinct_count"
         if any(word in lowered for word in ("how many", "count", "number of rows", "row count")):
             return "count"
         if any(word in lowered for word in ("highest", "top", "largest", "most", "best")):
@@ -996,11 +887,18 @@ class DeterministicAnalytics:
             return "group_by"
         if any(word in lowered for word in ("average", "avg", "mean")):
             return "average"
+        if "median" in lowered:
+            return "median"
         if any(word in lowered for word in ("minimum", "min")):
             return "minimum"
         if any(word in lowered for word in ("maximum", "max")):
             return "maximum"
         if any(word in lowered for word in ("sum", "total")):
+            return "sum"
+        if re.search(r"\bwhat\s+(?:is|was|were)\b", lowered) and any(
+            term in lowered
+            for term in ("revenue", "sales", "turnover", "profit", "amount", "income")
+        ):
             return "sum"
         return None
 
@@ -1023,6 +921,26 @@ class DeterministicAnalytics:
             year_column = self._column("Year") or self._year_like_column()
             if year_column and year_column not in exclude:
                 filters[year_column] = int(year_matches[-1])
+        month_column = self._column("Month")
+        if month_column and month_column not in exclude:
+            month_names = (
+                "january",
+                "february",
+                "march",
+                "april",
+                "may",
+                "june",
+                "july",
+                "august",
+                "september",
+                "october",
+                "november",
+                "december",
+            )
+            for month_number, month_name in enumerate(month_names, start=1):
+                if re.search(rf"\b{month_name}\b", lowered):
+                    filters[month_column] = month_number
+                    break
         return filters
 
     def _apply_filters(

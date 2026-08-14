@@ -237,6 +237,7 @@ class RetrievalPreparationOutput(StrictModel):
     def documents_as_dicts(self) -> list[dict[str, Any]]:
         return [document.model_dump(mode="json") for document in self.documents]
 
+
 class GroundedChatDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -244,23 +245,3 @@ class GroundedChatDraft(BaseModel):
     reasoning: str = Field(default="", max_length=900)
     source_ids: list[str] = Field(default_factory=list)
     insufficient_context: bool
-
-
-class DataframeFilter(StrictModel):
-    """One equality filter that the dataframe executor can validate."""
-
-    column: str = Field(min_length=1)
-    value: str | int | float | bool
-
-
-class DataframeQueryPlan(StrictModel):
-    """A deliberately small, safe language for dataframe analytics."""
-
-    operation: Literal["sum", "average", "minimum", "maximum", "count", "top", "bottom", "group_by"]
-    measure: str | None = None
-    group_by: str | None = None
-    filters: list[DataframeFilter] = Field(default_factory=list, max_length=8)
-    date_column: str | None = None
-    year: int | None = Field(default=None, ge=1900, le=3000)
-    month: int | None = Field(default=None, ge=1, le=12)
-    compare_previous_period: bool = False

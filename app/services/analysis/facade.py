@@ -106,14 +106,6 @@ class BusinessIntelligenceService:
             )
             else indexing_service
         )
-        calculation_retriever = (
-            rag
-            if rag is not None
-            and hasattr(rag, "route_query")
-            and hasattr(rag, "calculate_evidence")
-            else retriever
-        )
-
         self._file_service = file_service or DatasetFileService()
         self._calculation_cache = WorkspaceCalculationCache(self._file_service)
         self._dashboard_assembler = dashboard_assembler or DashboardAssembler(
@@ -158,7 +150,7 @@ class BusinessIntelligenceService:
             workspaces=self._workspace_service,
             messages=self.messages,
             storage=self.storage,
-            retriever=calculation_retriever,
+            retriever=self._retriever,
             chat_graph=chat_graph,
             settings=self.settings,
             files=self._file_service,
@@ -566,14 +558,6 @@ class BusinessIntelligenceService:
         datasets: list[DatasetRecord],
     ) -> tuple[DatasetRecord | None, list[DatasetRecord]]:
         return self._chat_service.select_chat_datasets(query, datasets)
-
-    def _workspace_calculation_response(
-        self,
-        query: str,
-        datasets: list[DatasetRecord],
-    ) -> str | None:
-        session_id = datasets[0].session_id if datasets else ""
-        return self._chat_service.workspace_calculation_response(session_id, query, datasets)
 
     def _save_workflow_dashboard(
         self,

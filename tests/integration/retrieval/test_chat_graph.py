@@ -184,7 +184,7 @@ def test_multi_chat_is_session_scoped_grounded_and_persisted() -> None:
     assert response.grounded is True
     assert response.agentMetadata.agent == "Chat assistant"
     assert response.agentMetadata.provider == "groq"
-    assert response.agentMetadata.model == "openai/gpt-oss-120b"
+    assert response.agentMetadata.model == "openai/gpt-oss-20b"
     assert rag.calls == [(SESSION_ID, "What is the revenue KPI?", 8)]
     assert rag.rerank_calls == [
         ("What is the revenue KPI?", ["kpi_revenue"])
@@ -308,6 +308,29 @@ def test_multi_chat_returns_unverified_general_guidance_for_empty_retrieval() ->
     assert len(rag.calls) == 1
     assert agent.calls == 0
     assert [message.role for message in storage.messages] == ["user", "assistant"]
+
+
+def test_multi_chat_skips_the_llm_for_weak_reranked_evidence() -> None:
+    service, _, rag, agent = _service(
+        [
+            RetrievedDocument(
+                page_content="A generic note about financial metrics.",
+                metadata={"source_id": "unrelated"},
+                score=0.2,
+            )
+        ],
+        GroundedChatDraft(
+            answer="This answer should not be generated.",
+            source_ids=["unrelated"],
+            insufficient_context=False,
+        ),
+    )
+
+    response = service.chat(SESSION_ID, "What caused the revenue change?", USER_ID)
+
+    assert "I can't confirm" in response.answer
+    assert agent.calls == 0
+    assert len(rag.rerank_calls) == 1
 
 
 def test_multi_chat_replaces_unhelpful_unverified_response_with_a_method() -> None:

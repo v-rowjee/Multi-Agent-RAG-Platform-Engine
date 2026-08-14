@@ -121,3 +121,12 @@ def test_bge_reranker_does_not_load_model_without_documents(monkeypatch) -> None
 
     assert reranker.rerank("What is revenue?", []) == []
     assert FakeCrossEncoder.instances == []
+
+
+def test_bge_reranker_warm_loads_model(monkeypatch) -> None:
+    _install_fake_cross_encoder(monkeypatch)
+    reranker = SentenceTransformerReranker()
+
+    reranker.warm()
+
+    assert len(FakeCrossEncoder.instances) == 1

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import re
 from pathlib import Path
@@ -11,13 +10,16 @@ from typing import Any
 from app.core.config import Settings
 from app.core.exceptions import SessionNotFoundError
 from app.core.model_policy import chat_model_usage
-from app.schemas.api import BusinessIntelligenceAgentInput, ChatResponse
+from app.schemas.api import (
+    AgentModelMetadata,
+    BusinessIntelligenceAgentInput,
+    ChatResponse,
+)
 from app.services.analysis.files import DatasetFileService
 from app.services.analysis.workspaces import WorkspaceService
 from app.services.analysis.workspace_calculation_cache import WorkspaceCalculationCache
 from app.services.persistence.analysis import DatasetRecord
 from app.services.persistence.messages import MessageRecord, MessageRepository
-from app.agents.multi.dataframe_query import plan_dataframe_query
 
 logger = logging.getLogger(__name__)
 
@@ -85,8 +87,12 @@ class BusinessIntelligenceChatService:
     ) -> ChatResponse:
         history = self.chat_history(session_id)
         selected, _ = self.select_chat_datasets(query, datasets)
-        scoped = [selected] if selected is not None else datasets
-        calculated = self.workspace_calculation_response(session_id, query, scoped)
+        scoped_datasets = [selected] if selected is not None else datasets
+        calculated = self.workspace_calculation_response(
+            session_id,
+            query,
+            scoped_datasets,
+        )
         retrieval_query = (
             f"In dataset `{selected.file_name}`, {query}"
             if selected is not None
@@ -102,7 +108,7 @@ class BusinessIntelligenceChatService:
             return self.save_chat_response(
                 session_id,
                 calculated,
-                [dataset.id for dataset in scoped],
+                [dataset.id for dataset in scoped_datasets],
                 grounded=True,
             )
         result = self.chat_graph.answer(
@@ -148,50 +154,41 @@ class BusinessIntelligenceChatService:
         query: str,
         datasets: list[DatasetRecord],
     ) -> str | None:
+        """Answer supported aggregate questions directly from workspace data."""
         if not datasets:
             return None
         try:
             snapshot = self.calculation_cache.get(session_id, datasets)
             if snapshot is None:
-                # A restart or LRU eviction is safe: rebuild the snapshot from
-                # durable storage, then reuse it for subsequent chat messages.
                 contents = [
                     self.storage.download_file(dataset.storage_path)
                     for dataset in datasets
                 ]
                 self.calculation_cache.prime(session_id, datasets, contents)
                 snapshot = self.calculation_cache.get(session_id, datasets)
-            if snapshot is None:
+            if snapshot is None or snapshot.dataframe.empty:
                 return None
-            combined = snapshot.dataframe
-            profile = snapshot.profile
-            if combined.empty:
-                return None
-            plan = asyncio.run(
-                asyncio.wait_for(plan_dataframe_query(query, profile), timeout=8)
-            )
+
             agent_input = BusinessIntelligenceAgentInput(
-                sessionId=datasets[0].session_id or datasets[0].id,
-                datasetId=datasets[0].session_id or datasets[0].id,
+                sessionId=session_id,
+                datasetId=session_id,
                 filePath="cached://workspace",
                 fileName="all uploaded datasets",
                 description=datasets[0].description,
             )
-            evidence = self.retriever.execute_dataframe_plan(
+            query_type = self.retriever.route_query(query, snapshot.profile)
+            evidence = self.retriever.calculate_evidence(
                 agent_input=agent_input,
-                profile=profile,
-                plan=plan,
-                dataframe=combined,
+                query=query,
+                query_type=query_type,
+                profile=snapshot.profile,
+                dataframe=snapshot.dataframe,
             )
             if evidence is None or not evidence.direct_answer:
                 return None
-            file_names = ", ".join(
-                f"`{dataset.file_name}`" for dataset in datasets
-            )
-            return (
-                f"{evidence.direct_answer.rstrip()} "
-                f"Dataset scope: {file_names}."
-            )
+
+            file_names = ", ".join(f"`{dataset.file_name}`" for dataset in datasets)
+            return f"{evidence.direct_answer.rstrip()} Dataset scope: {file_names}."
         except Exception:
             logger.exception(
                 "Workspace chat calculation failed datasets=%s",
@@ -408,8 +405,11 @@ class BusinessIntelligenceChatService:
             payload["agentMetadata"] = self.chat_model_metadata()
         return payload
 
-    def chat_model_metadata(self) -> dict[str, str]:
-        return chat_model_usage(self.settings.bi_pipeline_mode)
+    def chat_model_metadata(self) -> AgentModelMetadata:
+        """Return chat model metadata in the public API schema."""
+        return AgentModelMetadata.model_validate(
+            chat_model_usage(self.settings.bi_pipeline_mode)
+        )
 
 
 def _single_agent() -> Any:

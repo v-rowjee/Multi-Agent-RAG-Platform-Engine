@@ -205,7 +205,6 @@ def test_prompt_bundles_validate_and_render_structured_toon() -> None:
         "multi/chat.toon",
         "multi/dashboard_generation.toon",
             "multi/data_preparation.toon",
-            "multi/dataframe_query.toon",
         "multi/insight_synthesis.toon",
         "multi/kpi_trend.toon",
         "multi/orchestrator.toon",

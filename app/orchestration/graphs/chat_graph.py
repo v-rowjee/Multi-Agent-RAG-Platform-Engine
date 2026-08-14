@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.core.config import agent_model_policy, get_rag_config
+from app.rag.models import RetrievedDocument
 from app.schemas.specialists import GroundedChatDraft
 
 
@@ -20,6 +21,8 @@ _CHAT_SEARCH_LIMIT = _RAG_CONFIG.retrieval.chat_search_limit
 _CHAT_AGENT_TIMEOUT_SECONDS = agent_model_policy("chat").timeout_seconds
 _MAX_HISTORY_MESSAGES = 6
 _MAX_HISTORY_CHARACTERS = 2_000
+_MIN_RERANKER_SCORE_FOR_GENERATION = 0.35
+_MIN_VECTOR_SCORE_FOR_GENERATION = 0.6
 INSUFFICIENT_CONTEXT_ANSWER = (
     "I couldn't verify this against the uploaded dataset, but generally, "
     "review the relevant metric, time period, and comparison group before "
@@ -126,6 +129,27 @@ def _general_guidance_answer(query: str, answer: str) -> str:
         "I can't confirm that from the dataset context I have. Start by identifying "
         "the relevant metric, period, and comparison group, then compare the matching records."
     )
+
+
+def _relevance_score(document: RetrievedDocument) -> tuple[float, bool]:
+    reranker_score = getattr(document, "reranker_score", None)
+    if reranker_score is not None:
+        return float(reranker_score), True
+    return float(document.score), False
+
+
+def _has_generation_evidence(documents: list[RetrievedDocument]) -> bool:
+    """Require a strong match before spending time on a chat-model response."""
+    for document in documents:
+        score, has_reranker_score = _relevance_score(document)
+        minimum = (
+            _MIN_RERANKER_SCORE_FOR_GENERATION
+            if has_reranker_score
+            else _MIN_VECTOR_SCORE_FOR_GENERATION
+        )
+        if score >= minimum:
+            return True
+    return False
 
 
 def _safe_history(history: list[dict[str, str]]) -> list[dict[str, str]]:
@@ -291,6 +315,19 @@ def build_chat_graph(rag: Any | None = None, agent: Any | None = None):
             "reranked_documents": (reranked or candidates)[:_CHAT_SEARCH_LIMIT],
         }
 
+    def route_reranked_evidence(state: dict[str, Any]) -> str:
+        documents = state.get("reranked_documents") or []
+        if _has_generation_evidence(documents):
+            return "generate"
+        logger.info(
+            "Skipping chat model because no high-confidence evidence was found scores=%s",
+            [
+                round(_relevance_score(document)[0], 3)
+                for document in documents
+            ],
+        )
+        return "general"
+
     def route_retrieval(state: dict[str, Any]) -> str:
         return "general" if not state.get("retrieved_documents") else "rerank"
 
@@ -371,7 +408,11 @@ def build_chat_graph(rag: Any | None = None, agent: Any | None = None):
         {"general": "general", "rerank": "rerank"},
     )
     graph.add_edge("general", "ground")
-    graph.add_edge("rerank", "generate")
+    graph.add_conditional_edges(
+        "rerank",
+        route_reranked_evidence,
+        {"general": "general", "generate": "generate"},
+    )
     graph.add_edge("generate", "ground")
     graph.add_edge("ground", END)
     return graph.compile()
