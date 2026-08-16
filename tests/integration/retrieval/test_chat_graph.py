@@ -310,7 +310,7 @@ def test_multi_chat_returns_unverified_general_guidance_for_empty_retrieval() ->
     assert [message.role for message in storage.messages] == ["user", "assistant"]
 
 
-def test_multi_chat_skips_the_llm_for_weak_reranked_evidence() -> None:
+def test_multi_chat_uses_the_llm_for_weak_reranked_evidence() -> None:
     service, _, rag, agent = _service(
         [
             RetrievedDocument(
@@ -320,16 +320,17 @@ def test_multi_chat_skips_the_llm_for_weak_reranked_evidence() -> None:
             )
         ],
         GroundedChatDraft(
-            answer="This answer should not be generated.",
+            answer="The retrieved metric note is the only available evidence.",
             source_ids=["unrelated"],
             insufficient_context=False,
         ),
     )
 
-    response = service.chat(SESSION_ID, "What caused the revenue change?", USER_ID)
+    response = service.chat(SESSION_ID, "What was the revenue?", USER_ID)
 
-    assert "I can't confirm" in response.answer
-    assert agent.calls == 0
+    assert response.answer == "The retrieved metric note is the only available evidence."
+    assert response.grounded is True
+    assert agent.calls == 1
     assert len(rag.rerank_calls) == 1
 
 

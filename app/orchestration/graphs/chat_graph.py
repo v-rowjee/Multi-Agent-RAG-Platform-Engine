@@ -21,8 +21,11 @@ _CHAT_SEARCH_LIMIT = _RAG_CONFIG.retrieval.chat_search_limit
 _CHAT_AGENT_TIMEOUT_SECONDS = agent_model_policy("chat").timeout_seconds
 _MAX_HISTORY_MESSAGES = 6
 _MAX_HISTORY_CHARACTERS = 2_000
-_MIN_RERANKER_SCORE_FOR_GENERATION = 0.35
-_MIN_VECTOR_SCORE_FOR_GENERATION = 0.6
+# Retrieval is already session-scoped and filtered by its configured vector-match
+# threshold.  Let the chat agent inspect every returned document; grounding still
+# rejects unsupported citations and numeric claims before an answer is returned.
+_MIN_RERANKER_SCORE_FOR_GENERATION = 0.0
+_MIN_VECTOR_SCORE_FOR_GENERATION = 0.0
 INSUFFICIENT_CONTEXT_ANSWER = (
     "I couldn't verify this against the uploaded dataset, but generally, "
     "review the relevant metric, time period, and comparison group before "
@@ -139,7 +142,7 @@ def _relevance_score(document: RetrievedDocument) -> tuple[float, bool]:
 
 
 def _has_generation_evidence(documents: list[RetrievedDocument]) -> bool:
-    """Require a strong match before spending time on a chat-model response."""
+    """Allow the grounded chat agent to assess any retrieved session evidence."""
     for document in documents:
         score, has_reranker_score = _relevance_score(document)
         minimum = (

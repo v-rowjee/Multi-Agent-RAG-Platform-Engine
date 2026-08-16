@@ -164,6 +164,28 @@ def test_total_gross_revenue_matches_a_natural_column_name_and_year() -> None:
     assert "gross_revenue_gbp" in result.direct_answer
 
 
+def test_total_revenue_selects_a_revenue_measure_when_the_name_is_generic() -> None:
+    dataframe = pd.DataFrame(
+        {
+            "gross_revenue_gbp": [100.0, 250.0],
+            "net_revenue_gbp": [90.0, 225.0],
+        }
+    )
+    result = DeterministicAnalytics(
+        BusinessIntelligenceAgentInput(
+            sessionId="test-session",
+            filePath="cached://workspace",
+            fileName="sales.csv",
+        ),
+        {"summary": {"measures": ["gross_revenue_gbp", "net_revenue_gbp"]}},
+        dataframe=dataframe,
+    ).calculate("What was the total revenue?")
+
+    assert result is not None and result.direct_answer is not None
+    assert "gross revenue gbp" in result.direct_answer
+    assert "£350.00" in result.direct_answer
+
+
 def test_generic_forecast_question_forecasts_next_year_revenue(tmp_path: Path) -> None:
     result = _analytics(tmp_path).calculate("What forecast information is available?")
 

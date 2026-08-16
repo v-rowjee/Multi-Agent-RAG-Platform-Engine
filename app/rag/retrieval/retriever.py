@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 from app.core.config import get_rag_config
-from app.core.currency import format_currency
+from app.core.currency import detect_currency, format_currency
 from app.rag.indexing.document_builder import DatasetDocumentBuilder
 from app.rag.embeddings.service import get_embedding_service
 from app.rag.models import CalculatedEvidence, IndexStatus, QueryType, RagDocument, RerankedDocument, RetrievedDocument
@@ -25,6 +25,14 @@ from app.rag.vector_store import JsonDict, VectorStore, vector_store
 logger = logging.getLogger(__name__)
 _RAG_CONFIG = get_rag_config()
 _COLUMN_UNIT_SUFFIXES = frozenset({"gbp", "usd", "eur", "aud", "cad", "pct", "percent"})
+DERIVED_REVENUE_COLUMN = "__calculated_revenue__"
+REVENUE_COLUMN_TERMS = (
+    "revenue",
+    "turnover",
+    "sales amount",
+    "net sales",
+    "sales value",
+)
 
 
 @dataclass(frozen=True)
@@ -654,6 +662,21 @@ class DeterministicAnalytics:
         self.date_field = self._date_field()
         self.measures = self._measures()
         self.dimensions = self._dimensions()
+        self._revenue_source_columns: tuple[str, str] | None = None
+        self._revenue_measure = self._find_revenue_measure()
+        if self._revenue_measure is None:
+            source_columns = self._find_derived_revenue_columns()
+            if source_columns is not None:
+                price_column, quantity_column = source_columns
+                derived = (
+                    pd.to_numeric(self.df[price_column], errors="coerce")
+                    * pd.to_numeric(self.df[quantity_column], errors="coerce")
+                )
+                if derived.notna().any():
+                    self.df[DERIVED_REVENUE_COLUMN] = derived
+                    self.measures.append(DERIVED_REVENUE_COLUMN)
+                    self._revenue_measure = DERIVED_REVENUE_COLUMN
+                    self._revenue_source_columns = source_columns
 
     def calculate(self, query: str) -> CalculatedEvidence | None:
         lowered = query.casefold()
@@ -988,9 +1011,19 @@ class DeterministicAnalytics:
         return None
 
     def _query_measure(self, query: str) -> str | None:
-        return self._query_column(query, self.measures)
+        measure = self._query_column(
+            query,
+            [item for item in self.measures if item != DERIVED_REVENUE_COLUMN],
+        )
+        if measure is not None:
+            return measure
+        if any(term in _normalized_words(query) for term in ("revenue", "turnover")):
+            return self._revenue_measure
+        return None
 
     def _default_performance_measure(self) -> str | None:
+        if self._revenue_measure is not None:
+            return self._revenue_measure
         if not self.measures:
             return None
         preferred_terms = (
@@ -1090,17 +1123,80 @@ class DeterministicAnalytics:
         return None
 
     def _measure_label(self, measure: str) -> str:
+        if measure == DERIVED_REVENUE_COLUMN:
+            return "Revenue"
         return measure.replace("_", " ")
 
     def _measure_source_fields(self, measure: str) -> list[str]:
+        if measure == DERIVED_REVENUE_COLUMN and self._revenue_source_columns:
+            return list(self._revenue_source_columns)
         return [measure]
 
     def _measure_grounding(self, measure: str) -> str:
+        if measure == DERIVED_REVENUE_COLUMN and self._revenue_source_columns:
+            price_column, quantity_column = self._revenue_source_columns
+            return f"`Revenue` derived as `{price_column}` × `{quantity_column}`"
         return f"`{measure}`"
+
+    def _find_revenue_measure(self) -> str | None:
+        candidates = [*self.measures]
+        candidates.extend(
+            str(column)
+            for column in self.df.select_dtypes(include="number").columns
+            if str(column) not in candidates
+        )
+        return next(
+            (
+                column
+                for column in candidates
+                if any(term in _normalized_words(column) for term in REVENUE_COLUMN_TERMS)
+            ),
+            None,
+        )
+
+    def _find_derived_revenue_columns(self) -> tuple[str, str] | None:
+        numeric_columns = [
+            str(column)
+            for column in self.df.columns
+            if pd.to_numeric(self.df[column], errors="coerce").notna().any()
+        ]
+        price_column = self._best_named_column(
+            numeric_columns, ("unit price", "price", "unit cost")
+        )
+        quantity_column = self._best_named_column(
+            numeric_columns,
+            ("sales volume", "quantity", "qty", "units sold", "unit volume", "volume"),
+        )
+        if price_column is None or quantity_column is None or price_column == quantity_column:
+            return None
+        return price_column, quantity_column
+
+    @staticmethod
+    def _best_named_column(
+        columns: list[str], terms: tuple[str, ...]
+    ) -> str | None:
+        return next(
+            (
+                column
+                for term in terms
+                for column in columns
+                if term in _normalized_words(column)
+            ),
+            None,
+        )
+
+    def _is_revenue_measure(self, measure: str) -> bool:
+        return measure == self._revenue_measure or any(
+            term in _normalized_words(measure) for term in REVENUE_COLUMN_TERMS
+        )
 
     def _detect_currency(self) -> str | None:
         value = self.summary.get("currency")
-        return str(value) if isinstance(value, str) and value.strip() else None
+        if isinstance(value, str) and value.strip():
+            return value
+        return detect_currency(
+            [*self.df.columns, *self.summary.get("measures", [])]
+        )
 
     def _format_value(self, measure: str, value: float) -> str:
         if self._is_currency_measure(measure):
@@ -1109,7 +1205,11 @@ class DeterministicAnalytics:
 
     def _is_currency_measure(self, measure: str) -> bool:
         formats = self.summary.get("measureFormats")
-        return isinstance(formats, dict) and formats.get(measure) == "currency"
+        return (
+            self._is_revenue_measure(measure)
+            or bool(detect_currency([measure]))
+            or (isinstance(formats, dict) and formats.get(measure) == "currency")
+        )
 
     def _forecast_time_column(self) -> str | None:
         if self.date_field and self.date_field in self.df.columns:
