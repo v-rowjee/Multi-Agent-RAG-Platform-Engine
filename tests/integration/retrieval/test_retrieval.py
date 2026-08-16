@@ -5,7 +5,7 @@ from typing import Any
 
 import pandas as pd
 
-from app.agents.multi.retrieval_preparation import RetrievalPreparationAgent
+from app.agents.multi.retrieval_preparation import prepare_retrieval_documents
 from app.rag.retrieval.retriever import Retriever
 
 
@@ -194,7 +194,7 @@ def test_multi_retrieval_preparation_includes_prepared_row_evidence(
     ).to_csv(prepared_path, index=False)
 
     result = asyncio.run(
-        RetrievalPreparationAgent().run(
+        prepare_retrieval_documents(
             prepared_dataset={
                 "prepared_file_path": str(prepared_path),
                 "file_name": "sales.csv",
@@ -233,7 +233,7 @@ def test_multi_retrieval_preparation_includes_prepared_row_evidence(
 
 def test_multi_retrieval_preparation_indexes_dashboard_recommendations() -> None:
     result = asyncio.run(
-        RetrievalPreparationAgent().run(
+        prepare_retrieval_documents(
             prepared_dataset={},
             kpi_trend_output=None,
             anomaly_output=None,

@@ -1,5 +1,3 @@
-"""Capability-gated orchestrator for the multi-agent BI workflow."""
-
 from __future__ import annotations
 
 import json
@@ -10,10 +8,7 @@ from typing import Any, TypeAlias
 
 from app.core.config import agent_model_policy
 from app.core.llm import request_structured
-from app.core.model_policy import (
-    ModelExecutionStatus,
-    agent_model_usage,
-)
+from app.core.model_policy import ModelExecutionStatus
 from app.core.prompt_loader import render_agent_prompts
 from app.schemas.orchestration import (
     AGENT_ORDER,
@@ -32,11 +27,11 @@ logger = logging.getLogger(__name__)
 
 
 class OrchestratorError(RuntimeError):
-    """Raised when the orchestrator cannot read its required input."""
+    pass
 
 
 class OrchestrationPayloadTooLarge(OrchestratorError):
-    """Raised before provider invocation when compact messages exceed the limit."""
+    pass
 
 
 def _as_positive_int(value: Any) -> int:
@@ -49,7 +44,6 @@ def _as_positive_int(value: Any) -> int:
 def detect_analysis_capabilities(
     prepared_dataset: dict[str, Any],
 ) -> dict[str, bool]:
-    """Derive specialist applicability from dataset metadata, not an LLM."""
     profile = prepared_dataset.get("dataset_profile")
     profile = profile if isinstance(profile, dict) else {}
     raw_columns = profile.get("column_profiles")
@@ -109,9 +103,6 @@ def detect_analysis_capabilities(
             has_numeric_measure and has_temporal_column and enough_trend_periods
         ),
         "supports_anomalies": has_numeric_measure and enough_anomaly_rows,
-        # Forecasting is mandatory for datasets with a temporal dimension and a
-        # numeric measure.  The specialist handles short series with a safe
-        # deterministic fallback instead of being omitted by routing.
         "supports_forecasting": has_numeric_measure and has_temporal_column,
         "has_temporal_data": has_temporal_column,
     }
@@ -168,7 +159,6 @@ def build_orchestration_context(
     prepared_dataset: dict[str, Any],
     capabilities: dict[str, bool],
 ) -> dict[str, Any]:
-    """Build the bounded metadata-only context used for model routing."""
     profile = prepared_dataset.get("dataset_profile")
     profile = profile if isinstance(profile, dict) else {}
     raw_columns = profile.get("column_profiles")
@@ -342,9 +332,6 @@ async def _request_plan(
             f"{max_payload_bytes} bytes"
         )
     return await request_structured(
-        # Use the configured JSON-object policy and validate its response
-        # locally.  This avoids coupling orchestration to provider-specific
-        # JSON Schema support.
         policy=agent_model_policy("orchestrator"),
         response_model=OrchestrationPlan,
         schema_name="orchestration_plan",
@@ -356,13 +343,6 @@ def _capability_gated_plan(
     proposed: OrchestrationPlan,
     supported_agents: set[AgentName],
 ) -> OrchestrationPlan:
-    """Keep model routing inside deterministic capability gates.
-
-    Forecasting is a core dashboard output whenever the prepared dataset
-    supports it.  The routing model can still influence optional analysis,
-    but it must not randomly omit an eligible forecast on otherwise identical
-    uploads.
-    """
     proposed_selected = set(proposed.selected_agents)
     proposed_decisions = {
         decision.agent: decision for decision in proposed.decisions
@@ -412,96 +392,35 @@ def _capability_gated_plan(
     )
 
 
-class OrchestratorAgent:
-    def __init__(self, planner: Planner | None = None) -> None:
-        self._planner = planner
-
-    async def run(
-        self,
-        prepared_dataset: dict[str, Any],
-    ) -> OrchestrationPlan:
-        result, _ = await self.run_with_status(prepared_dataset)
-        return result
-
-    async def run_with_status(
-        self,
-        prepared_dataset: dict[str, Any],
-    ) -> tuple[OrchestrationPlan, ModelExecutionStatus]:
-        if not isinstance(prepared_dataset, dict):
-            raise OrchestratorError(
-                "prepared_dataset must be a dictionary."
-            )
-
-        capabilities = detect_analysis_capabilities(prepared_dataset)
-        supported_agents = _supported_agents(capabilities)
-        routing_context = build_orchestration_context(
-            prepared_dataset,
-            capabilities,
-        )
-
-        logger.info(
-            "Orchestration started with capabilities: %s",
-            capabilities,
-        )
-
-        if self._planner is None or not supported_agents:
-            result = _deterministic_routing_plan(supported_agents)
-            execution_status: ModelExecutionStatus = "configured"
-            logger.info("Deterministic capability routing completed.")
-        else:
-            try:
-                proposed = await self._planner(routing_context, supported_agents)
-                result = _capability_gated_plan(proposed, supported_agents)
-                execution_status = "succeeded"
-                logger.info("LLM orchestration completed.")
-            except OrchestrationPayloadTooLarge as exc:
-                logger.warning(
-                    "LLM orchestration skipped because the compact request "
-                    "was still too large: %s",
-                    exc,
-                )
-                result = _deterministic_routing_plan(supported_agents)
-                execution_status = "fallback"
-            except Exception as exc:
-                logger.warning(
-                    "LLM orchestration failed; using capability routing: %s",
-                    exc,
-                )
-                result = _deterministic_routing_plan(supported_agents)
-                execution_status = "fallback"
-
-        logger.info(
-            "Selected specialist agents: %s",
-            result.selected_agents,
-        )
-
-        return result, execution_status
-
-
-orchestrator_agent = OrchestratorAgent(planner=_request_plan)
-
-
-async def orchestrator_node(
-    state: dict[str, Any],
-) -> dict[str, Any]:
-    prepared_dataset = state.get("prepared_dataset")
-
+async def orchestrate(
+    prepared_dataset: dict[str, Any], planner: Planner | None = _request_plan
+) -> tuple[OrchestrationPlan, ModelExecutionStatus]:
     if not isinstance(prepared_dataset, dict):
-        raise OrchestratorError(
-            "state.prepared_dataset is required."
-        )
-
-    result, execution_status = await orchestrator_agent.run_with_status(
-        prepared_dataset
-    )
-
-    return {
-        "orchestration_plan": result.model_dump(mode="json"),
-        "completed_agents": ["orchestrator"],
-        "model_invocations": [
-            agent_model_usage("orchestrator", execution_status)
-        ],
-        "skipped_agents": [
-            agent for agent in AGENT_ORDER if agent not in result.selected_agents
-        ],
-    }
+        raise OrchestratorError("prepared_dataset must be a dictionary.")
+    capabilities = detect_analysis_capabilities(prepared_dataset)
+    supported_agents = _supported_agents(capabilities)
+    routing_context = build_orchestration_context(prepared_dataset, capabilities)
+    logger.info("Orchestration started with capabilities: %s", capabilities)
+    if planner is None or not supported_agents:
+        result = _deterministic_routing_plan(supported_agents)
+        execution_status: ModelExecutionStatus = "configured"
+        logger.info("Deterministic capability routing completed.")
+    else:
+        try:
+            proposed = await planner(routing_context, supported_agents)
+            result = _capability_gated_plan(proposed, supported_agents)
+            execution_status = "succeeded"
+            logger.info("LLM orchestration completed.")
+        except OrchestrationPayloadTooLarge as exc:
+            logger.warning(
+                "LLM orchestration skipped because the compact request was still too large: %s",
+                exc,
+            )
+            result = _deterministic_routing_plan(supported_agents)
+            execution_status = "fallback"
+        except Exception as exc:
+            logger.warning("LLM orchestration failed; using capability routing: %s", exc)
+            result = _deterministic_routing_plan(supported_agents)
+            execution_status = "fallback"
+    logger.info("Selected specialist agents: %s", result.selected_agents)
+    return result, execution_status

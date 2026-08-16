@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 from app.agents.multi import anomaly_detection as anomaly_module
-from app.agents.multi.anomaly_detection import AnomalyDetectionAgent
+from app.agents.multi.anomaly_detection import detect_anomalies
 from app.schemas.specialists import (
     AnomalyDefinition,
     AnomalyPlan,
@@ -53,7 +53,7 @@ def test_isolation_forest_detects_numeric_outlier_with_deterministic_interpretat
     monkeypatch.setattr(anomaly_module, "_request_plan", plan)
 
     result, execution_status, failure_reason = asyncio.run(
-        AnomalyDetectionAgent().run_with_status(_prepared(), frame)
+        detect_anomalies(_prepared(), frame)
     )
 
     assert execution_status == "succeeded"
@@ -80,7 +80,7 @@ def test_detected_observations_do_not_trigger_a_second_llm_call(monkeypatch) -> 
     monkeypatch.setattr(anomaly_module, "_request_plan", plan)
 
     result, execution_status, _ = asyncio.run(
-        AnomalyDetectionAgent().run_with_status(_prepared(), frame)
+        detect_anomalies(_prepared(), frame)
     )
 
     assert result.anomalies

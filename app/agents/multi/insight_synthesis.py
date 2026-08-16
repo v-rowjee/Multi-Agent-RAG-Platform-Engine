@@ -1,11 +1,10 @@
-"""Grounded synthesis of specialist business-intelligence results."""
 from __future__ import annotations
 
 from typing import Any
 
 from app.core.config import agent_model_policy
 from app.core.llm import request_structured, safe_model_failure_reason
-from app.core.model_policy import ModelExecutionStatus, agent_model_usage
+from app.core.model_policy import ModelExecutionStatus
 from app.core.prompt_loader import render_agent_prompts
 from app.schemas.specialists import (
     EvidenceReference,
@@ -67,6 +66,7 @@ def _source_ids(
     anomaly: dict[str, Any] | None,
     forecast: dict[str, Any] | None,
 ) -> set[tuple[str, str]]:
+    forecast = forecast or {}
     sources = {("dataset", "dataset_summary")}
     sources.update(
         ("kpi", str(item.get("id")))
@@ -127,6 +127,7 @@ def _deterministic_summary(
     anomaly: dict[str, Any] | None,
     forecast: dict[str, Any] | None,
 ) -> str:
+    forecast = forecast or {}
     profile = prepared.get("dataset_profile") or {}
     temporal = prepared.get("temporal_profile") or {}
     description = str(
@@ -221,6 +222,7 @@ def _deterministic_recommendations(
     anomaly: dict[str, Any] | None,
     forecast: dict[str, Any] | None,
 ) -> list[Recommendation]:
+    forecast = forecast or {}
     actions: list[Recommendation] = []
     first_anomaly = next(
         (
@@ -463,117 +465,51 @@ def _validate(
             "executive_summary": summary,
             "key_insights": insights,
             "recommendations": recommendations[:MAX_RECOMMENDATIONS],
-            # Limitations are operational facts from data preparation and the
-            # specialist outputs.  The synthesis prompt receives compact
-            # previews, so model-authored limitations could otherwise mistake
-            # those previews for a restriction of the full analysis.
             "limitations": _limitations(prepared, kpi, anomaly, forecast),
         }
     )
 
 
-class InsightSynthesisAgent:
-    async def run(
-        self,
-        prepared_dataset: dict[str, Any],
-        kpi_trend_output: dict[str, Any] | None,
-        anomaly_output: dict[str, Any] | None,
-        forecasting_output: dict[str, Any] | None,
-    ) -> InsightSynthesisOutput:
-        result, _, _ = await self.run_with_status(
-            prepared_dataset,
-            kpi_trend_output,
-            anomaly_output,
-            forecasting_output,
+async def synthesize_insights(
+    prepared_dataset: dict[str, Any],
+    kpi_trend_output: dict[str, Any] | None,
+    anomaly_output: dict[str, Any] | None,
+    forecasting_output: dict[str, Any] | None,
+) -> tuple[InsightSynthesisOutput, ModelExecutionStatus, str | None]:
+    prepared = prepared_dataset if isinstance(prepared_dataset, dict) else {}
+    available = _source_ids(prepared, kpi_trend_output, anomaly_output, forecasting_output)
+    try:
+        result = await _request_synthesis(
+            _compact(prepared, kpi_trend_output, anomaly_output, forecasting_output)
         )
-        return result
-
-    async def run_with_status(
-        self,
-        prepared_dataset: dict[str, Any],
-        kpi_trend_output: dict[str, Any] | None,
-        anomaly_output: dict[str, Any] | None,
-        forecasting_output: dict[str, Any] | None,
-    ) -> tuple[InsightSynthesisOutput, ModelExecutionStatus, str | None]:
-        prepared = (
-            prepared_dataset if isinstance(prepared_dataset, dict) else {}
-        )
-        available = _source_ids(
+        result = _validate(
+            result,
+            available,
             prepared,
             kpi_trend_output,
             anomaly_output,
             forecasting_output,
         )
-        try:
-            result = await _request_synthesis(
-                _compact(
-                    prepared,
-                    kpi_trend_output,
-                    anomaly_output,
-                    forecasting_output,
-                )
-            )
-            result = _validate(
-                result,
-                available,
+        return (
+            result.model_copy(
+                update={
+                    "warnings": list(
+                        dict.fromkeys([*(prepared.get("warnings") or []), *result.warnings])
+                    )
+                }
+            ),
+            "succeeded",
+            None,
+        )
+    except Exception as exc:
+        return (
+            _fallback(
                 prepared,
                 kpi_trend_output,
                 anomaly_output,
                 forecasting_output,
-            )
-            return (
-                result.model_copy(
-                    update={
-                        "warnings": list(
-                            dict.fromkeys(
-                                [
-                                    *(prepared.get("warnings") or []),
-                                    *result.warnings,
-                                ]
-                            )
-                        )
-                    }
-                ),
-                "succeeded",
-                None,
-            )
-        except Exception as exc:
-            return (
-                _fallback(
-                    prepared,
-                    kpi_trend_output,
-                    anomaly_output,
-                    forecasting_output,
-                    f"Deterministic synthesis was used: {exc}",
-                ),
-                "fallback",
-                safe_model_failure_reason(exc),
-            )
-
-
-insight_synthesis_agent = InsightSynthesisAgent()
-
-
-async def insight_synthesis_node(state: dict[str, Any]) -> dict[str, Any]:
-    prepared = dict(state.get("prepared_dataset", {}) or {})
-    prepared["warnings"] = [
-        *(prepared.get("warnings") or []),
-        *(state.get("warnings") or []),
-    ]
-    result, execution_status, failure_reason = await insight_synthesis_agent.run_with_status(
-        prepared,
-        state.get("kpi_trend_output"),
-        state.get("anomaly_output"),
-        state.get("forecasting_output"),
-    )
-    return {
-        "synthesis_output": result.model_dump(mode="json"),
-        "completed_agents": ["insight_synthesis"],
-        "model_invocations": [
-            agent_model_usage(
-                "insight_synthesis",
-                execution_status,
-                failure_reason=failure_reason,
-            )
-        ],
-    }
+                f"Deterministic synthesis was used: {exc}",
+            ),
+            "fallback",
+            safe_model_failure_reason(exc),
+        )

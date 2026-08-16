@@ -1,4 +1,3 @@
-"""Isolation Forest anomaly specialist with grounded business interpretation."""
 from __future__ import annotations
 
 import math
@@ -10,7 +9,7 @@ from sklearn.ensemble import IsolationForest
 
 from app.core.config import agent_model_policy
 from app.core.llm import request_structured, safe_model_failure_reason
-from app.core.model_policy import ModelExecutionStatus, agent_model_usage
+from app.core.model_policy import ModelExecutionStatus
 from app.core.prompt_loader import render_agent_prompts
 from app.schemas.specialists import (
     AnomalyDefinition,
@@ -97,11 +96,6 @@ def _ensure_primary_temporal_analysis(
     prepared: dict[str, Any],
     df: pd.DataFrame,
 ) -> list[AnomalyDefinition]:
-    """Always analyse the dashboard's primary time series at its own grain.
-
-    This prevents a row-level or differently aggregated metric from being
-    plotted as though it were an anomaly in the primary timeline.
-    """
     primary = select_primary_series(prepared, df)
     if not primary:
         return analyses[:MAX_ANALYSES]
@@ -179,13 +173,6 @@ def _series(df: pd.DataFrame, item: AnomalyDefinition) -> list[tuple[str | None,
 def _classify_severities(
     anomalies: list[AnomalyResult],
 ) -> list[AnomalyResult]:
-    """Reserve critical for the strongest displayed anomalies.
-
-    An Isolation Forest flag is not automatically a critical business event.
-    Classifying the final dashboard selection together produces a useful
-    critical-versus-warning split instead of making each analysis' single
-    strongest observation critical.
-    """
     ranked = sorted(
         anomalies,
         key=lambda result: -(result.anomaly_score or 0),
@@ -211,9 +198,6 @@ def _detect(item: AnomalyDefinition, values: pd.Series, group: str | None = None
     if len(numeric) < MIN_ISOLATION_SAMPLES or numeric.nunique() < 2:
         return []
     detector = IsolationForest(
-        # A quarter of observations is a deliberately modest sensitivity floor.
-        # Preserve the automatic threshold below as well, so this policy can add
-        # near-outliers without ever hiding observations previously detected.
         contamination=ANOMALY_CONTAMINATION,
         n_estimators=100,
         random_state=42,
@@ -227,9 +211,6 @@ def _detect(item: AnomalyDefinition, values: pd.Series, group: str | None = None
         for index, value, prediction, score in zip(
             numeric.index, numeric, predictions, scores, strict=True
         )
-        # With ``contamination="auto"``, scikit-learn uses an offset of -0.5;
-        # our score is the negated raw score, so values above 0.5 were also
-        # anomalies under the previous policy. Keep their detection intact.
         if prediction == -1 or score > AUTO_ANOMALY_SCORE_THRESHOLD
     ]
     ranked = sorted(flagged, key=lambda result: result[2], reverse=True)
@@ -247,93 +228,52 @@ def _fallback_interpretation(anomaly: AnomalyResult) -> str:
     )
 
 
-class AnomalyDetectionAgent:
-    async def run(
-        self, prepared_dataset: dict[str, Any], dataframe: pd.DataFrame
-    ) -> AnomalyDetectionOutput:
-        result, _, _ = await self.run_with_status(prepared_dataset, dataframe)
-        return result
-
-    async def run_with_status(
-        self,
-        prepared_dataset: dict[str, Any],
-        dataframe: pd.DataFrame,
-    ) -> tuple[AnomalyDetectionOutput, ModelExecutionStatus, str | None]:
-        if not isinstance(prepared_dataset, dict):
-            raise AnomalyDetectionError("prepared_dataset must be a dictionary.")
-        if not isinstance(dataframe, pd.DataFrame):
-            raise AnomalyDetectionError("A prepared pandas DataFrame is required.")
-        df = dataframe.copy()
-        warnings: list[str] = []
-        try:
-            proposed = await _request_plan(prepared_dataset)
-            analyses, validation = _validate(proposed, df)
-            warnings.extend(validation)
-            if not analyses:
-                raise AnomalyDetectionError("LLM plan has no valid analyses.")
-            limitations = proposed.limitations
-            execution_status: ModelExecutionStatus = "succeeded"
-            failure_reason = None
-        except Exception as exc:
-            warnings.append(str(exc))
-            fallback = _fallback(prepared_dataset, df)
-            analyses, validation = _validate(fallback, df)
-            warnings.extend(validation)
-            limitations = fallback.limitations
-            execution_status = "fallback"
-            failure_reason = safe_model_failure_reason(exc)
-        analyses = _ensure_primary_temporal_analysis(
-            analyses,
-            prepared_dataset,
-            df,
-        )
-        anomalies: list[AnomalyResult] = []
-        for item in analyses:
-            for group, values in _series(df, item):
-                anomalies.extend(_detect(item, values, group))
-        anomalies.sort(key=lambda result: -(result.anomaly_score or 0))
-        anomalies = _classify_severities(anomalies[:MAX_ANOMALIES])
-        if anomalies:
-            anomalies = [
+async def detect_anomalies(
+    prepared_dataset: dict[str, Any], dataframe: pd.DataFrame | None
+) -> tuple[AnomalyDetectionOutput, ModelExecutionStatus, str | None]:
+    if not isinstance(prepared_dataset, dict):
+        raise AnomalyDetectionError("prepared_dataset must be a dictionary.")
+    if not isinstance(dataframe, pd.DataFrame):
+        raise AnomalyDetectionError("A prepared pandas DataFrame is required.")
+    df = dataframe.copy()
+    warnings: list[str] = []
+    try:
+        proposed = await _request_plan(prepared_dataset)
+        analyses, validation = _validate(proposed, df)
+        warnings.extend(validation)
+        if not analyses:
+            raise AnomalyDetectionError("LLM plan has no valid analyses.")
+        limitations = proposed.limitations
+        execution_status: ModelExecutionStatus = "succeeded"
+        failure_reason = None
+    except Exception as exc:
+        warnings.append(str(exc))
+        fallback = _fallback(prepared_dataset, df)
+        analyses, validation = _validate(fallback, df)
+        warnings.extend(validation)
+        limitations = fallback.limitations
+        execution_status = "fallback"
+        failure_reason = safe_model_failure_reason(exc)
+    analyses = _ensure_primary_temporal_analysis(analyses, prepared_dataset, df)
+    anomalies = [
+        anomaly
+        for item in analyses
+        for group, values in _series(df, item)
+        for anomaly in _detect(item, values, group)
+    ]
+    anomalies.sort(key=lambda result: -(result.anomaly_score or 0))
+    anomalies = _classify_severities(anomalies[:MAX_ANOMALIES])
+    return (
+        AnomalyDetectionOutput(
+            anomalies=[
                 item.model_copy(
                     update={"business_interpretation": _fallback_interpretation(item)}
                 )
                 for item in anomalies
-            ]
-        return (
-            AnomalyDetectionOutput(
-                anomalies=anomalies,
-                warnings=warnings,
-                limitations=[
-                    *(prepared_dataset.get("limitations") or []),
-                    *limitations,
-                ],
-            ),
-            execution_status,
-            failure_reason,
-        )
-
-
-anomaly_detection_agent = AnomalyDetectionAgent()
-
-
-async def anomaly_detection_node(state: dict[str, Any]) -> dict[str, Any]:
-    try:
-        result, execution_status, failure_reason = await anomaly_detection_agent.run_with_status(
-            state.get("prepared_dataset", {}), state.get("prepared_dataframe")
-        )
-    except AnomalyDetectionError as exc:
-        result = AnomalyDetectionOutput(status="partial", limitations=[str(exc)])
-        execution_status = "fallback"
-        failure_reason = safe_model_failure_reason(exc)
-    return {
-        "anomaly_output": result.model_dump(mode="json"),
-        "completed_agents": ["anomaly_detection"],
-        "model_invocations": [
-            agent_model_usage(
-                "anomaly_detection",
-                execution_status,
-                failure_reason=failure_reason,
-            )
-        ],
-    }
+            ],
+            warnings=warnings,
+            limitations=[*(prepared_dataset.get("limitations") or []), *limitations],
+        ),
+        execution_status,
+        failure_reason,
+    )

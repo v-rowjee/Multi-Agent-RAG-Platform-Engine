@@ -1,4 +1,3 @@
-"""Validated dashboard assembly from authoritative specialist outputs."""
 from __future__ import annotations
 
 import re
@@ -11,7 +10,7 @@ import pandas as pd
 from app.core.config import agent_model_policy
 from app.core.currency import format_currency
 from app.core.llm import request_structured, safe_model_failure_reason
-from app.core.model_policy import ModelExecutionStatus, agent_model_usage
+from app.core.model_policy import ModelExecutionStatus
 from app.core.prompt_loader import render_agent_prompts
 from app.schemas.api import DashboardResponse
 from app.schemas.dashboard import (
@@ -78,9 +77,6 @@ def _chart_candidates(
         )
         if isinstance(item, dict) and item.get("name")
     }
-    # Present the planner with the same business-first ordering used by the
-    # deterministic fallback.  Raw input-column order made otherwise valid
-    # plans gravitate toward incidental fields rather than useful breakdowns.
     dimensions = _ranked_dimensions(prepared, df)
     measures = ranked_measures(prepared, df)
     return {
@@ -127,7 +123,6 @@ async def _request_layout(
 
 
 def _dimension_score(_value: str, cardinality: int) -> int:
-    """Prefer compact, information-rich dimensions without domain assumptions."""
     return -abs(cardinality - 8)
 
 
@@ -319,13 +314,6 @@ def _validated_chart_specs(
     used_comparisons: set[tuple[str, ...]] = set()
 
     def comparison_key(spec: SupportingChartSpec) -> tuple[str, ...]:
-        """Identify the data relationship a chart communicates.
-
-        Different chart types are not automatically different analysis: a bar,
-        horizontal bar, and donut built from the same dimension and measure all
-        repeat the same breakdown.  Reserve the four dashboard slots for
-        complementary questions whenever the dataset offers alternatives.
-        """
         if spec.type == "scatter":
             return ("scatter", str(spec.x_measure), str(spec.y_measure))
         return (
@@ -413,7 +401,6 @@ def _validated_plan(
         )
 
     def select_trends() -> list[str]:
-        """Put the forecast target first so the timeline can render it."""
         defaults = select(
             plan.selected_trend_ids,
             trends,
@@ -514,7 +501,7 @@ def _dataset_summary(prepared: dict[str, Any]) -> dict[str, Any]:
     profile = prepared.get("dataset_profile") or {}
     columns = profile.get("column_profiles") or []
     date = prepared.get("date_column")
-    date_profile = next(
+    date_profile: dict[str, Any] = next(
         (item for item in columns if item.get("name") == date),
         {},
     )
@@ -731,6 +718,7 @@ def _fallback_dashboard_actions(
     selected_anomalies: list[str],
     forecasting_output: dict[str, Any] | None,
 ) -> list[dict[str, Any]]:
+    forecast = forecasting_output or {}
     actions: list[dict[str, Any]] = []
     if selected_anomalies:
         actions.append(
@@ -758,9 +746,7 @@ def _fallback_dashboard_actions(
                 "sourceIds": [selected_kpis[0]],
             }
         )
-    if (forecasting_output or {}).get("series_id") and (
-        forecasting_output or {}
-    ).get("forecast"):
+    if forecast.get("series_id") and forecast.get("forecast"):
         actions.append(
             {
                 "id": "action_plan_forecast",
@@ -770,7 +756,7 @@ def _fallback_dashboard_actions(
                     "forecast periods and compare predictions with new actuals."
                 ),
                 "priority": "medium",
-                "sourceIds": [str(forecasting_output["series_id"])],
+                "sourceIds": [str(forecast["series_id"])],
             }
         )
     generic = [
@@ -1058,7 +1044,7 @@ def _build_dashboard(
             1,
         )
     ]
-    sections = []
+    sections: list[dict[str, Any]] = []
     seen = set()
     for section in plan.section_order + [
         DashboardSection(id="kpis"),
@@ -1181,156 +1167,53 @@ def _build_dashboard(
     return DashboardResponse.model_validate(response)
 
 
-class DashboardGenerationAgent:
-    async def run(
-        self,
-        prepared_dataset: dict[str, Any],
-        dataframe: pd.DataFrame,
-        kpi_trend_output: dict[str, Any] | None,
-        anomaly_output: dict[str, Any] | None,
-        forecasting_output: dict[str, Any] | None,
-        synthesis_output: dict[str, Any],
-    ) -> DashboardGenerationOutput:
-        result, _, _ = await self.run_with_status(
-            prepared_dataset,
-            dataframe,
-            kpi_trend_output,
-            anomaly_output,
-            forecasting_output,
-            synthesis_output,
-        )
-        return result
-
-    async def run_with_status(
-        self,
-        prepared_dataset: dict[str, Any],
-        dataframe: pd.DataFrame,
-        kpi_trend_output: dict[str, Any] | None,
-        anomaly_output: dict[str, Any] | None,
-        forecasting_output: dict[str, Any] | None,
-        synthesis_output: dict[str, Any],
-    ) -> tuple[DashboardGenerationOutput, ModelExecutionStatus, str | None]:
-        prepared = (
-            prepared_dataset if isinstance(prepared_dataset, dict) else {}
-        )
-        synthesis = (
-            synthesis_output if isinstance(synthesis_output, dict) else {}
-        )
-        if not isinstance(dataframe, pd.DataFrame):
-            raise RuntimeError("A prepared pandas DataFrame is required for dashboard generation.")
-        df = dataframe.copy()
-        kpis = (kpi_trend_output or {}).get("kpis", [])
-        trends = (kpi_trend_output or {}).get("trends", [])
-        anomalies = (anomaly_output or {}).get("anomalies", [])
-        insights = synthesis.get("key_insights", [])
-        recommendations = synthesis.get("recommendations", [])
-        fallback = _fallback_plan(
-            kpis,
-            trends,
-            anomalies,
-            insights,
-            recommendations,
-            forecasting_output,
-        )
-        warning = ""
-        payload = {
-            "kpis": [
-                {"id": item.get("id"), "title": item.get("title")}
-                for item in kpis
-            ],
-            "trends": [
-                {"id": item.get("id"), "title": item.get("title")}
-                for item in trends
-            ],
-            "anomalies": [
-                {"id": item.get("id"), "severity": item.get("severity")}
-                for item in anomalies
-            ],
-            "insights": [
-                {"id": item.get("id"), "title": item.get("title")}
-                for item in insights
-            ],
-            "recommendations": [
-                {"id": item.get("id"), "title": item.get("title")}
-                for item in recommendations
-            ],
-            "forecast_available": bool(
-                (forecasting_output or {}).get("forecast")
-            ),
-            "chart_candidates": _chart_candidates(prepared, df),
-        }
-        try:
-            plan = await _request_layout(payload)
-            execution_status: ModelExecutionStatus = "succeeded"
-            failure_reason = None
-        except Exception as exc:
-            plan = fallback
-            warning = f"Deterministic dashboard layout was used: {exc}"
-            execution_status = "fallback"
-            failure_reason = safe_model_failure_reason(exc)
-        plan = _validated_plan(
-            plan,
-            fallback,
-            kpis,
-            trends,
-            anomalies,
-            insights,
-            recommendations,
-            forecasting_output,
-            prepared,
-            df,
-        )
-        dashboard = _build_dashboard(
-            prepared,
-            plan,
-            kpi_trend_output,
-            anomaly_output,
-            forecasting_output,
-            synthesis,
-            df,
-        )
-        return (
-            DashboardGenerationOutput(
-                status=(
-                    "complete"
-                    if dashboard.dashboard and dashboard.dashboard.kpis
-                    else "partial"
-                ),
-                layout_plan=plan,
-                dashboard=dashboard,
-                warnings=[warning] if warning else [],
-            ),
-            execution_status,
-            failure_reason,
-        )
-
-
-dashboard_generation_agent = DashboardGenerationAgent()
-
-
-async def dashboard_generation_node(state: dict[str, Any]) -> dict[str, Any]:
-    prepared = dict(state.get("prepared_dataset", {}) or {})
-    prepared["session_id"] = state.get(
-        "session_id",
-        prepared.get("session_id", ""),
-    )
-    result, execution_status, failure_reason = await dashboard_generation_agent.run_with_status(
-        prepared,
-        state.get("prepared_dataframe"),
-        state.get("kpi_trend_output"),
-        state.get("anomaly_output"),
-        state.get("forecasting_output"),
-        state.get("synthesis_output", {}),
-    )
-    return {
-        "dashboard_output": result.dashboard.model_dump(mode="json"),
-        "warnings": result.warnings,
-        "completed_agents": ["dashboard_generation"],
-        "model_invocations": [
-            agent_model_usage(
-                "dashboard_generation",
-                execution_status,
-                failure_reason=failure_reason,
-            )
-        ],
+async def generate_dashboard(
+    prepared_dataset: dict[str, Any],
+    dataframe: pd.DataFrame | None,
+    kpi_trend_output: dict[str, Any] | None,
+    anomaly_output: dict[str, Any] | None,
+    forecasting_output: dict[str, Any] | None,
+    synthesis_output: dict[str, Any],
+) -> tuple[DashboardGenerationOutput, ModelExecutionStatus, str | None]:
+    prepared = prepared_dataset if isinstance(prepared_dataset, dict) else {}
+    synthesis = synthesis_output if isinstance(synthesis_output, dict) else {}
+    if not isinstance(dataframe, pd.DataFrame):
+        raise RuntimeError("A prepared pandas DataFrame is required for dashboard generation.")
+    df = dataframe.copy()
+    kpis = (kpi_trend_output or {}).get("kpis", [])
+    trends = (kpi_trend_output or {}).get("trends", [])
+    anomalies = (anomaly_output or {}).get("anomalies", [])
+    insights = synthesis.get("key_insights", [])
+    recommendations = synthesis.get("recommendations", [])
+    fallback = _fallback_plan(kpis, trends, anomalies, insights, recommendations, forecasting_output)
+    warning = ""
+    payload = {
+        "kpis": [{"id": item.get("id"), "title": item.get("title")} for item in kpis],
+        "trends": [{"id": item.get("id"), "title": item.get("title")} for item in trends],
+        "anomalies": [{"id": item.get("id"), "severity": item.get("severity")} for item in anomalies],
+        "insights": [{"id": item.get("id"), "title": item.get("title")} for item in insights],
+        "recommendations": [{"id": item.get("id"), "title": item.get("title")} for item in recommendations],
+        "forecast_available": bool((forecasting_output or {}).get("forecast")),
+        "chart_candidates": _chart_candidates(prepared, df),
     }
+    try:
+        plan = await _request_layout(payload)
+        execution_status: ModelExecutionStatus = "succeeded"
+        failure_reason = None
+    except Exception as exc:
+        plan = fallback
+        warning = f"Deterministic dashboard layout was used: {exc}"
+        execution_status = "fallback"
+        failure_reason = safe_model_failure_reason(exc)
+    plan = _validated_plan(plan, fallback, kpis, trends, anomalies, insights, recommendations, forecasting_output, prepared, df)
+    dashboard = _build_dashboard(prepared, plan, kpi_trend_output, anomaly_output, forecasting_output, synthesis, df)
+    return (
+        DashboardGenerationOutput(
+            status="complete" if dashboard.dashboard and dashboard.dashboard.kpis else "partial",
+            layout_plan=plan,
+            dashboard=dashboard,
+            warnings=[warning] if warning else [],
+        ),
+        execution_status,
+        failure_reason,
+    )

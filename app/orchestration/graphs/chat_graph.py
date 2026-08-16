@@ -268,12 +268,11 @@ def build_chat_graph(rag: Any | None = None, agent: Any | None = None):
     """Compile the guarded retrieval, generation, and grounding workflow."""
     from langgraph.graph import END, START, StateGraph
 
-    from app.agents.multi.chat import chat_agent
+    from app.agents.multi.chat import generate_chat_draft
     from app.orchestration.state import ChatState
     from app.rag.retrieval.retriever import retriever
 
     retrieval = rag or retriever
-    chat = agent or chat_agent
 
     def guardrail(state: dict[str, Any]) -> dict[str, Any]:
         query = str(state.get("query") or "").strip()
@@ -346,7 +345,7 @@ def build_chat_graph(rag: Any | None = None, agent: Any | None = None):
         try:
             draft = asyncio.run(
                 asyncio.wait_for(
-                    chat.run(
+                    (agent.run if agent else generate_chat_draft)(
                         session_id=state["session_id"],
                         query=state["query"],
                         retrieved_documents=documents,

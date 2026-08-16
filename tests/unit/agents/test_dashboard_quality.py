@@ -11,15 +11,14 @@ from app.agents.multi import dashboard_generation as dashboard_module
 from app.agents.multi import forecasting as forecasting_module
 from app.agents.multi import kpi_trend as kpi_trend_module
 from app.agents.multi import orchestrator as orchestrator_module
-from app.agents.multi.dashboard_generation import DashboardGenerationAgent
-from app.agents.multi.data_preparation import data_preparation_agent
+from app.agents.multi.dashboard_generation import generate_dashboard
 from app.agents.multi.forecasting import ForecastingAgent
 from app.agents.multi.insight_synthesis import _fallback as synthesis_fallback
-from app.agents.multi.kpi_trend import KPITrendAgent
-from app.agents.multi.orchestrator import (OrchestratorAgent, _request_plan,
+from app.agents.multi.kpi_trend import analyze_kpi_trends
+from app.agents.multi.orchestrator import (_request_plan,
                                            build_orchestration_context,
                                            detect_analysis_capabilities,
-                                           orchestrator_agent)
+                                           orchestrate)
 from app.core.config import configured_agent_models
 from app.schemas.dashboard import DashboardLayoutPlan, SupportingChartSpec
 from app.schemas.orchestration import AgentDecision, OrchestrationPlan
@@ -163,8 +162,8 @@ def test_kpis_use_latest_period_and_percentage_change(
         "app.agents.multi.kpi_trend._request_plan",
         no_llm,
     )
-    result, execution_status = asyncio.run(
-        KPITrendAgent().run_with_status(prepared, _rows())
+    result, execution_status, _ = asyncio.run(
+        analyze_kpi_trends(prepared, _rows())
     )
     revenue = next(item for item in result.kpis if item.measure == "net_revenue_gbp")
 
@@ -231,8 +230,8 @@ def test_kpi_definitions_are_resolved_in_a_single_planning_call(
 
     monkeypatch.setattr(kpi_trend_module, "_request_plan", title_plan)
 
-    result, execution_status = asyncio.run(
-        KPITrendAgent().run_with_status(prepared, _rows())
+    result, execution_status, _ = asyncio.run(
+        analyze_kpi_trends(prepared, _rows())
     )
 
     assert call_count == 1
@@ -319,8 +318,8 @@ def test_kpi_query_typo_uses_the_llm_fallback_value(
 
     monkeypatch.setattr(kpi_trend_module, "_request_plan", title_plan)
 
-    result, _ = asyncio.run(
-        KPITrendAgent().run_with_status(prepared, _rows())
+    result, _, _ = asyncio.run(
+        analyze_kpi_trends(prepared, _rows())
     )
     revenue = next(item for item in result.kpis if item.id == definition.id)
 
@@ -501,7 +500,7 @@ def test_dashboard_has_non_temporal_charts_forecast_and_actions(
 
     monkeypatch.setattr(dashboard_module, "_request_layout", incomplete_layout)
     result, execution_status, failure_reason = asyncio.run(
-        DashboardGenerationAgent().run_with_status(
+        generate_dashboard(
             prepared,
             frame,
             kpi_output,
@@ -671,7 +670,7 @@ def test_deterministic_routing_and_active_model_defaults() -> None:
             "has_temporal_data": True,
         },
     }
-    plan = asyncio.run(OrchestratorAgent(planner=None).run(prepared))
+    plan, _ = asyncio.run(orchestrate(prepared, planner=None))
 
     assert plan.selected_agents == ["kpi_trend", "anomaly_detection", "forecasting"]
     assert configured_agent_models() == {
@@ -687,8 +686,7 @@ def test_deterministic_routing_and_active_model_defaults() -> None:
 
 
 def test_production_planning_agents_enable_their_llm_calls() -> None:
-    assert data_preparation_agent.enable_llm_enrichment is True
-    assert orchestrator_agent._planner is _request_plan
+    assert orchestrate.__defaults__ == (_request_plan,)
 
 
 def test_compound_plan_mandates_forecasting_for_short_temporal_series() -> None:
@@ -733,7 +731,7 @@ def test_compound_plan_mandates_forecasting_for_short_temporal_series() -> None:
             ],
         )
 
-    plan = asyncio.run(OrchestratorAgent(planner=propose).run(prepared))
+    plan, _ = asyncio.run(orchestrate(prepared, planner=propose))
 
     assert plan.selected_agents == ["kpi_trend", "forecasting"]
     forecast = next(
@@ -775,7 +773,7 @@ def test_compound_plan_always_selects_eligible_forecasting() -> None:
             ],
         )
 
-    plan = asyncio.run(OrchestratorAgent(planner=omit_forecasting).run(prepared))
+    plan, _ = asyncio.run(orchestrate(prepared, planner=omit_forecasting))
 
     assert plan.selected_agents == ["kpi_trend", "anomaly_detection", "forecasting"]
     forecast = next(
@@ -807,7 +805,7 @@ def test_compound_failure_uses_deterministic_capability_routing() -> None:
         raise RuntimeError("413 Request Entity Too Large")
 
     plan, execution_status = asyncio.run(
-        OrchestratorAgent(planner=unavailable_planner).run_with_status(prepared)
+        orchestrate(prepared, planner=unavailable_planner)
     )
 
     assert plan.selected_agents == ["kpi_trend", "anomaly_detection", "forecasting"]
@@ -988,7 +986,7 @@ def test_oversized_compound_request_skips_provider_and_routes_deterministically(
         },
     }
 
-    plan = asyncio.run(OrchestratorAgent(planner=_request_plan).run(prepared))
+    plan, _ = asyncio.run(orchestrate(prepared, planner=_request_plan))
 
     assert provider_called is False
     assert plan.selected_agents == ["kpi_trend", "anomaly_detection"]

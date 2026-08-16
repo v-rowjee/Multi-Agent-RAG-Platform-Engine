@@ -9,8 +9,8 @@ import pytest
 
 from app.agents.multi import data_preparation as preparation_module
 from app.agents.multi.data_preparation import (
-    DataPreparationAgent,
     _plan_with_optional_enrichment,
+    prepare_dataset,
 )
 from app.schemas.data_preparation import (
     ColumnProfile,
@@ -265,28 +265,29 @@ def test_deterministic_semantic_role_fallback_uses_profile_statistics() -> None:
 
 
 def test_data_preparation_defaults_to_deterministic_planning(
-    tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    source = tmp_path / "sales.csv"
-    pd.DataFrame(
-        {
-            "transaction_id": [f"txn-{index}" for index in range(12)],
-            "transaction_date": pd.date_range("2025-01-01", periods=12),
-            "revenue": [float(index + 1) for index in range(12)],
-            "branch": ["north", "south"] * 6,
-        }
-    ).to_csv(source, index=False)
+    dataframe, cleaning_report = generic_clean_dataframe(
+        pd.DataFrame(
+            {
+                "transaction_id": [f"txn-{index}" for index in range(12)],
+                "transaction_date": pd.date_range("2025-01-01", periods=12),
+                "revenue": [float(index + 1) for index in range(12)],
+                "branch": ["north", "south"] * 6,
+            }
+        )
+    )
 
     async def unexpected_request(_: DatasetProfile) -> PreparationPlan:
         raise AssertionError("LLM enrichment should be disabled by default")
 
     monkeypatch.setattr(preparation_module, "_request_plan", unexpected_request)
-    result = asyncio.run(
-        DataPreparationAgent().run(
-            uploaded_file_path=str(source),
+    result, _ = asyncio.run(
+        prepare_dataset(
+            dataframe,
             session_id="session-123",
-            output_dir=tmp_path / "prepared",
+            generic_cleaning_report=cleaning_report,
+            enable_llm_enrichment=False,
         )
     )
 

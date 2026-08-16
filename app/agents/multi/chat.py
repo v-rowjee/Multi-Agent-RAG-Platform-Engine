@@ -1,4 +1,3 @@
-"""Grounded chat generation over session-scoped retrieval evidence only."""
 from __future__ import annotations
 
 import logging
@@ -106,53 +105,38 @@ async def _request_draft(
     )
 
 
-class ChatAgent:
-    async def run(
-        self,
-        session_id: str,
-        query: str,
-        retrieved_documents: list[RetrievedDocument],
-        history: list[dict[str, str]] | None = None,
-    ) -> GroundedChatDraft:
-        documents = retrieved_documents[:MAX_RETRIEVED_DOCUMENTS]
+async def generate_chat_draft(
+    session_id: str,
+    query: str,
+    retrieved_documents: list[RetrievedDocument],
+    history: list[dict[str, str]] | None = None,
+) -> GroundedChatDraft:
+    documents = retrieved_documents[:MAX_RETRIEVED_DOCUMENTS]
+    logger.info(
+        "Chat agent started session_id=%s retrieved_document_count=%s",
+        session_id,
+        len(documents),
+    )
+    if not documents:
         logger.info(
-            "Chat agent started session_id=%s retrieved_document_count=%s",
+            "No dataset evidence retrieved; generating general guidance session_id=%s",
             session_id,
-            len(documents),
         )
-        if not documents:
-            logger.info(
-                "No dataset evidence retrieved; generating general guidance session_id=%s",
-                session_id,
-            )
-
-        try:
-            draft = await _request_draft(
-                query,
-                _compact_context(documents),
-                history or [],
-            )
-            validated = draft.model_copy(
-                update={"source_ids": _validated_source_ids(draft, documents)}
-            )
-            if validated.insufficient_context:
-                logger.info("Insufficient context detected session_id=%s", session_id)
-            logger.info("Grounded draft generated session_id=%s", session_id)
-            return validated
-        except (ValidationError, RuntimeError, ValueError):
-            logger.info("Chat agent fallback used session_id=%s", session_id)
-            return GroundedChatDraft(
-                answer=FALLBACK_ANSWER,
-                source_ids=[],
-                insufficient_context=True,
-            )
-        except Exception:
-            logger.exception("Chat agent fallback used session_id=%s", session_id)
-            return GroundedChatDraft(
-                answer=FALLBACK_ANSWER,
-                source_ids=[],
-                insufficient_context=True,
-            )
-
-
-chat_agent = ChatAgent()
+    try:
+        draft = await _request_draft(query, _compact_context(documents), history or [])
+        validated = draft.model_copy(
+            update={"source_ids": _validated_source_ids(draft, documents)}
+        )
+        if validated.insufficient_context:
+            logger.info("Insufficient context detected session_id=%s", session_id)
+        logger.info("Grounded draft generated session_id=%s", session_id)
+        return validated
+    except (ValidationError, RuntimeError, ValueError):
+        logger.info("Chat agent fallback used session_id=%s", session_id)
+    except Exception:
+        logger.exception("Chat agent fallback used session_id=%s", session_id)
+    return GroundedChatDraft(
+        answer=FALLBACK_ANSWER,
+        source_ids=[],
+        insufficient_context=True,
+    )

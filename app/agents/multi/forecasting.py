@@ -1,4 +1,4 @@
-"""Independent Chronos-2 forecasting specialist."""
+"""Forecast a prepared primary time series."""
 from __future__ import annotations
 
 import math
@@ -8,115 +8,101 @@ import numpy as np
 import numpy.typing as npt
 import pandas as pd
 
-from app.core.model_policy import forecasting_model_usage
 from app.schemas.specialists import (
     ForecastDefinition,
     ForecastingOutput,
-    ForecastPlan,
     ForecastPoint,
     HistoricalPoint,
 )
-
-from app.services.data.series import (
-    is_numeric_measure,
-    period_frequency,
-    ranked_measures,
-    select_primary_series,
-    selected_date_column,
-    selected_granularity,
+from app.services.data.series import period_frequency, select_primary_series
+from app.services.forecasting.chronos import (
+    MAX_HORIZON,
+    ChronosServiceError,
+    chronos_service,
 )
-from app.services.forecasting.service import forecasting_service
 
-# Chronos-2 requires a meaningful history. Short temporal datasets still receive
-# a deterministic forecast so routing never suppresses a detected time series.
 MIN_CHRONOS_PERIODS = 4
 FORECAST_HORIZON_FRACTION = 0.25
-SUPPORTED_AGGREGATIONS = {"sum", "mean", "count"}
-SUPPORTED_GRANULARITIES = {"day", "week", "month", "quarter", "year"}
 
 
 class ForecastingError(RuntimeError):
     pass
 
 
-
-def _frequency(granularity: str) -> str:
-    return period_frequency(granularity)
-
-
-def _granularity(prepared: dict[str, Any]) -> str:
-    return selected_granularity(prepared)
-
-
-def _numeric(df: pd.DataFrame, column: str) -> bool:
-    return is_numeric_measure(df, column)
+def _load_dataframe(
+    prepared_dataset: dict[str, Any], dataframe: pd.DataFrame | None
+) -> pd.DataFrame:
+    if dataframe is not None:
+        return dataframe.copy()
+    return pd.read_csv(prepared_dataset["prepared_file_path"])
 
 
 def _forecast_horizon(period_count: int) -> int:
-    """Return one quarter of the observed regular time intervals, rounded up."""
     if period_count < 1:
         raise ForecastingError("Forecasting requires at least one historical period.")
-    return max(1, math.ceil(period_count * FORECAST_HORIZON_FRACTION))
+    return min(
+        max(1, math.ceil(period_count * FORECAST_HORIZON_FRACTION)), MAX_HORIZON
+    )
 
 
-def _supports(prepared: dict[str, Any], df: pd.DataFrame) -> str | None:
-    date = selected_date_column(prepared, df)
-    if not isinstance(date, str) or date not in df: return "Forecasting requires a prepared date column."
-    if not ranked_measures(prepared, df): return "Forecasting requires a numeric measure."
-    periods = pd.to_datetime(df[date], errors="coerce").dropna().dt.to_period(_frequency(_granularity(prepared))).nunique()
-    return None if periods >= 1 else "Forecasting requires at least one valid historical period."
-
-
-def _fallback(prepared: dict[str, Any], df: pd.DataFrame) -> ForecastPlan:
+def _build_definition(
+    prepared: dict[str, Any], df: pd.DataFrame
+) -> ForecastDefinition:
     primary = select_primary_series(prepared, df)
     if not primary:
         raise ForecastingError("No forecastable primary series is available.")
+    periods = (
+        pd.to_datetime(df[primary.date_column], errors="coerce")
+        .dropna()
+        .dt.to_period(period_frequency(primary.granularity))
+        .nunique()
+    )
     slug = "_".join(
         part for part in primary.measure.lower().replace("-", "_").split("_") if part
     )
-    date_values = pd.to_datetime(df[primary.date_column], errors="coerce").dropna()
-    period_count = date_values.dt.to_period(_frequency(primary.granularity)).nunique()
-    return ForecastPlan(
-        forecast=ForecastDefinition(
-            id=f"forecast_{slug or 'measure'}",
-            title=f"Forecast {primary.measure.replace('_', ' ').title()}",
-            measure=primary.measure,
-            aggregation=primary.aggregation,
-            date_column=primary.date_column,
-            granularity=primary.granularity,
-            horizon=_forecast_horizon(period_count),
-        )
+    return ForecastDefinition(
+        id=f"forecast_{slug or 'measure'}",
+        title=f"Forecast {primary.measure.replace('_', ' ').title()}",
+        measure=primary.measure,
+        aggregation=primary.aggregation,
+        date_column=primary.date_column,
+        granularity=primary.granularity,
+        horizon=_forecast_horizon(periods),
     )
 
 
-def _validate(plan: ForecastPlan, df: pd.DataFrame) -> ForecastDefinition:
-    item = plan.forecast
-    if not _numeric(df, item.measure) or item.date_column not in df or item.aggregation not in SUPPORTED_AGGREGATIONS or item.granularity not in SUPPORTED_GRANULARITIES:
-        raise ForecastingError("Forecast plan references unsupported columns or options.")
-    if item.group_by and (item.group_by not in df or item.group_value is None): raise ForecastingError("Forecast grouping requires an existing group and value.")
-    return item
-
-
-def _prepare(df: pd.DataFrame, item: ForecastDefinition) -> pd.Series:
-    columns = [item.date_column, item.measure] + ([item.group_by] if item.group_by else [])
-    data = df[columns].copy(); data[item.date_column] = pd.to_datetime(data[item.date_column], errors="coerce")
-    data = data.dropna(subset=[item.date_column])
-    if item.group_by: data = data[data[item.group_by].astype(str) == str(item.group_value)]
-    data["period"] = data[item.date_column].dt.to_period(_frequency(item.granularity))
-    grouped = data.groupby("period", observed=True)[item.measure].agg("sum" if item.aggregation == "sum" else "mean" if item.aggregation == "mean" else "count").astype(float).sort_index()
-    if grouped.empty: raise ForecastingError("The selected series has no valid values.")
-    regular = grouped.reindex(pd.period_range(grouped.index.min(), grouped.index.max(), freq=_frequency(item.granularity)))
-    # Small internal gaps are linearly interpolated; remaining edge/long gaps are rejected.
-    regular = regular.interpolate(limit=2, limit_area="inside")
-    if regular.isna().any(): raise ForecastingError("The selected time series has unfillable gaps.")
-    return regular
+def _prepare_series(df: pd.DataFrame, definition: ForecastDefinition) -> pd.Series:
+    data = df[[definition.date_column, definition.measure]].copy()
+    data[definition.date_column] = pd.to_datetime(
+        data[definition.date_column], errors="coerce"
+    )
+    data = data.dropna(subset=[definition.date_column])
+    data["period"] = data[definition.date_column].dt.to_period(
+        period_frequency(definition.granularity)
+    )
+    series = (
+        data.groupby("period", observed=True)[definition.measure]
+        .agg(definition.aggregation)
+        .astype(float)
+        .sort_index()
+    )
+    if series.empty:
+        raise ForecastingError("The selected series has no valid values.")
+    series = series.reindex(
+        pd.period_range(
+            series.index.min(),
+            series.index.max(),
+            freq=period_frequency(definition.granularity),
+        )
+    ).interpolate(limit=2, limit_area="inside")
+    if series.isna().any():
+        raise ForecastingError("The selected time series has unfillable gaps.")
+    return series
 
 
 def _fallback_forecast(
-    series: pd.Series,
-    horizon: int,
-    granularity: str,
-) -> tuple[str, list[float], list[float] | None, list[float] | None]:
+    series: pd.Series, horizon: int, granularity: str
+) -> tuple[str, list[float], list[float], list[float]]:
     values = np.asarray(series.values, dtype=float)
     seasonal_period = {
         "day": 7,
@@ -128,11 +114,11 @@ def _fallback_forecast(
     non_negative = bool((values >= 0).all())
     if len(values) == 1:
         predictions = [float(values[-1])] * horizon
-        residuals = np.asarray([], dtype=float)
+        residuals = np.asarray([])
         model = "naive_last_value"
     elif seasonal_period and len(values) >= seasonal_period * 2:
         predictions = [
-            float(values[-seasonal_period + (index % seasonal_period)])
+            float(values[-seasonal_period + index % seasonal_period])
             for index in range(horizon)
         ]
         residuals = values[seasonal_period:] - values[:-seasonal_period]
@@ -151,103 +137,97 @@ def _fallback_forecast(
     if non_negative:
         predictions = [max(0.0, value) for value in predictions]
     spread = float(np.std(residuals)) * 1.96 if len(residuals) >= 2 else 0.0
-    lower = [max(0.0, value - spread) if non_negative else value - spread for value in predictions]
-    upper = [value + spread for value in predictions]
-    return model, predictions, lower, upper
+    lower = [
+        max(0.0, value - spread) if non_negative else value - spread
+        for value in predictions
+    ]
+    return model, predictions, lower, [value + spread for value in predictions]
 
 
-class ForecastingAgent:
-    async def run(
-        self, prepared_dataset: dict[str, Any], dataframe: pd.DataFrame | None = None
-    ) -> ForecastingOutput:
-        if not isinstance(prepared_dataset, dict): raise ForecastingError("prepared_dataset must be a dictionary.")
-        if dataframe is None:
-            prepared_file_path = prepared_dataset.get("prepared_file_path")
-            if not isinstance(prepared_file_path, str) or not prepared_file_path:
-                raise ForecastingError("A prepared pandas DataFrame is required.")
-            try:
-                dataframe = pd.read_csv(prepared_file_path)
-            except Exception as exc:
-                raise ForecastingError(
-                    "The prepared forecasting data could not be loaded."
-                ) from exc
-        if not isinstance(dataframe, pd.DataFrame):
-            raise ForecastingError("A prepared pandas DataFrame is required.")
-        df = dataframe.copy()
-        limitation = _supports(prepared_dataset, df)
-        if limitation: return ForecastingOutput(limitations=[limitation])
-        warnings: list[str] = []
-        proposed = _fallback(prepared_dataset, df)
-        definition = _validate(proposed, df)
-        limitations = proposed.limitations
-        try: series = _prepare(df, definition)
-        except Exception as exc:
-            return ForecastingOutput(series_id=definition.id, title=definition.title, measure=definition.measure, aggregation=definition.aggregation, granularity=definition.granularity, horizon=definition.horizon, limitations=[*limitations, str(exc)], warnings=warnings)
-        definition = definition.model_copy(
-            update={"horizon": _forecast_horizon(len(series))}
-        )
-        historical = [HistoricalPoint(period=str(period), value=round(float(value), 6)) for period, value in series.items()]
-        confidence_level: float | None
-        try:
-            if len(series) < MIN_CHRONOS_PERIODS:
-                raise ForecastingError(
-                    f"Chronos-2 requires at least {MIN_CHRONOS_PERIODS} historical periods."
-                )
-            response = await forecasting_service.forecast(series, definition.horizon)
-        except Exception as exc:
-            model, values, lower_bounds, upper_bounds = _fallback_forecast(
-                series,
-                definition.horizon,
-                definition.granularity,
-            )
-            limitations = [
-                *limitations,
-                f"Chronos-2 was unavailable; {model} fallback was used: {exc}",
-            ]
-            confidence_level = 0.95
-        else:
-            model = "Chronos-2"
-            values = response.values
-            lower_bounds = response.lower_bounds
-            upper_bounds = response.upper_bounds
-            confidence_level = None
-        future = pd.period_range(series.index[-1] + 1, periods=definition.horizon, freq=_frequency(definition.granularity))
-        forecast = [ForecastPoint(period=str(period), value=round(float(value), 6), lower_bound=round(float(lower_bounds[index]), 6) if lower_bounds and index < len(lower_bounds) else None, upper_bound=round(float(upper_bounds[index]), 6) if upper_bounds and index < len(upper_bounds) else None) for index, (period, value) in enumerate(zip(future, values))]
-        return ForecastingOutput(status="complete", series_id=definition.id, title=definition.title, measure=definition.measure, aggregation=definition.aggregation, granularity=definition.granularity, horizon=definition.horizon, model=model, confidence_level=confidence_level, historical=historical, forecast=forecast, limitations=limitations, warnings=warnings)
-
-
-forecasting_agent = ForecastingAgent()
-
-
-async def forecasting_node(state: dict[str, Any]) -> dict[str, Any]:
-    plan = state.get("orchestration_plan")
-    selected_agents = plan.get("selected_agents", []) if isinstance(plan, dict) else None
-    if isinstance(selected_agents, list) and "forecasting" not in selected_agents:
-        result = ForecastingOutput(
-            status="skipped",
-            limitations=[
-                "Forecasting was skipped because the dataset does not contain suitable time-series data."
-            ],
-        )
-        return {
-            "forecasting_output": result.model_dump(mode="json"),
-            "completed_agents": ["forecasting"],
-            "skipped_agents": ["forecasting"],
-        }
-
-    try:
-        result = await forecasting_agent.run(
-            state.get("prepared_dataset", {}), state.get("prepared_dataframe")
-        )
-    except ForecastingError as exc:
-        result = ForecastingOutput(limitations=[str(exc)])
-    execution_status = (
-        "succeeded"
-        if result.status == "complete" and result.model == "Chronos-2"
-        else "fallback"
+def _build_output(
+    definition: ForecastDefinition,
+    series: pd.Series,
+    model: str,
+    values: list[float],
+    lower_bounds: list[float],
+    upper_bounds: list[float],
+    limitations: list[str],
+) -> ForecastingOutput:
+    future = pd.period_range(
+        series.index[-1] + 1,
+        periods=definition.horizon,
+        freq=period_frequency(definition.granularity),
     )
-    return {
-        "forecasting_output": result.model_dump(mode="json"),
-        "completed_agents": ["forecasting"],
-        "model_invocations": [forecasting_model_usage(execution_status)],
-    }
+    return ForecastingOutput(
+        status="complete",
+        series_id=definition.id,
+        title=definition.title,
+        measure=definition.measure,
+        aggregation=definition.aggregation,
+        granularity=definition.granularity,
+        horizon=definition.horizon,
+        model=model,
+        confidence_level=0.95,
+        historical=[
+            HistoricalPoint(period=str(period), value=round(float(value), 6))
+            for period, value in series.items()
+        ],
+        forecast=[
+            ForecastPoint(
+                period=str(period),
+                value=round(float(value), 6),
+                lower_bound=round(float(lower_bounds[index]), 6),
+                upper_bound=round(float(upper_bounds[index]), 6),
+            )
+            for index, (period, value) in enumerate(zip(future, values, strict=True))
+        ],
+        limitations=limitations,
+    )
+
+
+async def forecast(
+    prepared_dataset: dict[str, Any], dataframe: pd.DataFrame | None = None
+) -> ForecastingOutput:
+    df = _load_dataframe(prepared_dataset, dataframe)
+    definition = _build_definition(prepared_dataset, df)
+    try:
+        series = _prepare_series(df, definition)
+    except ForecastingError as exc:
+        return ForecastingOutput(
+            series_id=definition.id,
+            title=definition.title,
+            measure=definition.measure,
+            aggregation=definition.aggregation,
+            granularity=definition.granularity,
+            horizon=definition.horizon,
+            limitations=[str(exc)],
+        )
+
+    definition = definition.model_copy(
+        update={"horizon": _forecast_horizon(len(series))}
+    )
+    limitations: list[str] = []
+    if len(series) < MIN_CHRONOS_PERIODS:
+        model, values, lower_bounds, upper_bounds = _fallback_forecast(
+            series, definition.horizon, definition.granularity
+        )
+        limitations.append(
+            f"Chronos-2 requires at least {MIN_CHRONOS_PERIODS} historical "
+            f"periods; {model} fallback was used."
+        )
+    else:
+        try:
+            response = await chronos_service.forecast(series, definition.horizon)
+            model, values = "Chronos-2", response.values
+            lower_bounds, upper_bounds = response.lower_bounds, response.upper_bounds
+        except ChronosServiceError:
+            model, values, lower_bounds, upper_bounds = _fallback_forecast(
+                series, definition.horizon, definition.granularity
+            )
+            limitations.append(
+                f"Chronos-2 was unavailable; {model} fallback was used."
+            )
+
+    return _build_output(
+        definition, series, model, values, lower_bounds, upper_bounds, limitations
+    )

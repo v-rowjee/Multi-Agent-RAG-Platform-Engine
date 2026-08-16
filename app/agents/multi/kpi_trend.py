@@ -1,4 +1,3 @@
-"""KPI and trend specialist. The LLM plans definitions; pandas calculates values."""
 from __future__ import annotations
 
 import ast
@@ -10,8 +9,8 @@ from typing import Any
 import pandas as pd
 
 from app.core.config import agent_model_policy
-from app.core.llm import request_structured
-from app.core.model_policy import ModelExecutionStatus, agent_model_usage
+from app.core.llm import request_structured, safe_model_failure_reason
+from app.core.model_policy import ModelExecutionStatus
 from app.core.prompt_loader import render_agent_prompts
 from app.schemas.specialists import (
     KPIDefinition,
@@ -138,7 +137,6 @@ def _pandas_query(
     dimension: str | None = None,
     dimension_value: str | int | float | bool | None = None,
 ) -> str:
-    """Create a query using the only scalar pandas shapes the executor accepts."""
     operation = "nunique" if aggregation == "distinct_count" else aggregation
     measure_ref = repr(measure)
     if dimension and dimension_value is not None:
@@ -223,7 +221,6 @@ def _parse_aggregation_call(
 
 
 def _parse_kpi_query(query: str, df: pd.DataFrame) -> ParsedKPIQuery | None:
-    """Parse a safe scalar aggregation or ratio of two scalar aggregations."""
     try:
         expression = ast.parse(query, mode="eval").body
     except (SyntaxError, TypeError):
@@ -235,8 +232,6 @@ def _parse_kpi_query(query: str, df: pd.DataFrame) -> ParsedKPIQuery | None:
             return None
         measure, aggregation, dimension, dimension_value = numerator
         denominator_measure, denominator_aggregation, denominator_dimension, denominator_value = denominator
-        # A ratio must use precisely the same optional filter on both operands;
-        # otherwise its displayed numerator and denominator would have different scopes.
         if (dimension, dimension_value) != (denominator_dimension, denominator_value):
             return None
         return ParsedKPIQuery(
@@ -264,7 +259,6 @@ def _parse_pandas_query(
     query: str,
     df: pd.DataFrame,
 ) -> tuple[str, str, str | None, str | int | float | bool | None] | None:
-    """Validate the supported expression language, preserving the legacy tuple API."""
     parsed = _parse_kpi_query(query, df)
     if parsed is None:
         return None
@@ -368,7 +362,6 @@ def _ensure_core_definitions(
     prepared: dict[str, Any],
     df: pd.DataFrame,
 ) -> tuple[list[KPIDefinition], list[TrendDefinition]]:
-    """Guarantee useful KPI coverage and one forecast-aligned primary trend."""
     kpis = list(kpis)
     used_measures = {item.measure for item in kpis}
     for measure in ranked_measures(prepared, df):
@@ -442,7 +435,6 @@ def _aggregate(series: pd.Series, aggregation: str) -> float | int | None:
 
 
 def _calculate_value(source: pd.DataFrame, item: KPIDefinition) -> float | int | None:
-    """Calculate a validated KPI without evaluating model-provided Python."""
     aggregation = item.numerator_aggregation or item.aggregation
     numerator = _aggregate(source[item.measure], aggregation)
     if numerator is None or item.denominator_measure is None:
@@ -609,93 +601,58 @@ def _calculate_trends(
     return result, warnings
 
 
-class KPITrendAgent:
-    async def run(
-        self, prepared_dataset: dict[str, Any], dataframe: pd.DataFrame
-    ) -> KPITrendOutput:
-        result, _ = await self.run_with_status(prepared_dataset, dataframe)
-        return result
-
-    async def run_with_status(
-        self,
-        prepared_dataset: dict[str, Any],
-        dataframe: pd.DataFrame,
-    ) -> tuple[KPITrendOutput, ModelExecutionStatus]:
-        if not isinstance(prepared_dataset, dict):
-            raise KPITrendError("prepared_dataset must be a dictionary.")
-        if not isinstance(dataframe, pd.DataFrame):
-            raise KPITrendError("A prepared pandas DataFrame is required.")
-        df = dataframe.copy()
-        if df.empty:
-            return (
-                KPITrendOutput(
-                    status="partial",
-                    limitations=["Prepared dataset contains no rows."],
-                ),
-                "configured",
-            )
-        warnings: list[str] = []
-        try:
-            proposed = await _request_plan(prepared_dataset)
-            kpi_definitions, trends, validation_warnings = _valid_plan(
-                proposed.kpis,
-                proposed.trends,
-                df,
-                prepared_dataset,
-            )
-            warnings.extend(validation_warnings)
-            if not kpi_definitions and not trends:
-                raise KPITrendError("LLM plan has no valid definitions.")
-            execution_status: ModelExecutionStatus = "succeeded"
-        except Exception as exc:
-            warnings.append(f"{exc}")
-            kpi_definitions, trends, plan_limitations = _fallback_plan(prepared_dataset, df)
-            execution_status = "fallback"
-            proposed = KPITrendPlan(limitations=plan_limitations)
-        kpi_definitions, trends = _ensure_core_definitions(
-            kpi_definitions,
-            trends,
-            prepared_dataset,
-            df,
-        )
-        kpis, calculation_warnings = _calculate_kpis(
-            df,
-            kpi_definitions,
-            prepared_dataset,
-        )
-        warnings.extend(calculation_warnings)
-        trends, trend_warnings = _calculate_trends(df, trends)
-        warnings.extend(trend_warnings)
+async def analyze_kpi_trends(
+    prepared_dataset: dict[str, Any], dataframe: pd.DataFrame | None
+) -> tuple[KPITrendOutput, ModelExecutionStatus, str | None]:
+    if not isinstance(prepared_dataset, dict):
+        raise KPITrendError("prepared_dataset must be a dictionary.")
+    if not isinstance(dataframe, pd.DataFrame):
+        raise KPITrendError("A prepared pandas DataFrame is required.")
+    df = dataframe.copy()
+    if df.empty:
         return (
             KPITrendOutput(
-                status="complete" if kpis or trends else "partial",
-                kpis=kpis,
-                trends=trends,
-                warnings=warnings,
-                limitations=[
-                    *(prepared_dataset.get("limitations") or []),
-                    *proposed.limitations,
-                ],
+                status="partial", limitations=["Prepared dataset contains no rows."]
             ),
-            execution_status,
+            "configured",
+            None,
         )
-
-
-kpi_trend_agent = KPITrendAgent()
-
-
-async def kpi_trend_node(state: dict[str, Any]) -> dict[str, Any]:
+    warnings: list[str] = []
     try:
-        result, execution_status = await kpi_trend_agent.run_with_status(
-            state.get("prepared_dataset", {}), state.get("prepared_dataframe")
+        proposed = await _request_plan(prepared_dataset)
+        kpi_definitions, trends, validation_warnings = _valid_plan(
+            proposed.kpis, proposed.trends, df, prepared_dataset
         )
-    except KPITrendError as exc:
-        result = KPITrendOutput(status="partial", limitations=[str(exc)])
+        warnings.extend(validation_warnings)
+        if not kpi_definitions and not trends:
+            raise KPITrendError("LLM plan has no valid definitions.")
+        execution_status: ModelExecutionStatus = "succeeded"
+        failure_reason = None
+    except Exception as exc:
+        warnings.append(str(exc))
+        kpi_definitions, trends, plan_limitations = _fallback_plan(prepared_dataset, df)
         execution_status = "fallback"
-    return {
-        "kpi_trend_output": result.model_dump(mode="json"),
-        "completed_agents": ["kpi_trend"],
-        "model_invocations": [
-            agent_model_usage("kpi_trend", execution_status)
-        ],
-    }
+        failure_reason = safe_model_failure_reason(exc)
+        proposed = KPITrendPlan(limitations=plan_limitations)
+    kpi_definitions, trends = _ensure_core_definitions(
+        kpi_definitions, trends, prepared_dataset, df
+    )
+    kpis, calculation_warnings = _calculate_kpis(
+        df, kpi_definitions, prepared_dataset
+    )
+    warnings.extend(calculation_warnings)
+    trends, trend_warnings = _calculate_trends(df, trends)
+    warnings.extend(trend_warnings)
+    return (
+        KPITrendOutput(
+            status="complete" if kpis or trends else "partial",
+            kpis=kpis,
+            trends=trends,
+            warnings=warnings,
+            limitations=[
+                *(prepared_dataset.get("limitations") or []), *proposed.limitations
+            ],
+        ),
+        execution_status,
+        failure_reason,
+    )

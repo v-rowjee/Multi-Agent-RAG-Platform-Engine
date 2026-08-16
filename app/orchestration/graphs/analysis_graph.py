@@ -2,77 +2,34 @@
 
 from __future__ import annotations
 
-import logging
 from functools import lru_cache
-from time import perf_counter
 from typing import Any, Awaitable, Callable, Mapping, TypeAlias, cast
 
+from langgraph.graph import END, START, StateGraph
 
-# Newer graph adapters accept ``AnalysisState`` while existing agent nodes
-# retain ``dict[str, Any]`` for direct and legacy invocation. LangGraph passes
-# the same mapping at runtime, so both are valid graph-node implementations.
-StateNode: TypeAlias = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
-StateNodeLike: TypeAlias = StateNode | Callable[
-    [dict[str, Any]], Awaitable[dict[str, Any]]
-]
+from app.orchestration.nodes.anomaly_detection_node import anomaly_detection_node
+from app.orchestration.nodes.cleaning_node import generic_cleaning_node
+from app.orchestration.nodes.dashboard_generation_node import dashboard_generation_node
+from app.orchestration.nodes.forecasting_node import forecasting_node
+from app.orchestration.nodes.insight_synthesis_node import insight_synthesis_node
+from app.orchestration.nodes.kpi_trend_node import kpi_trend_node
+from app.orchestration.nodes.orchestrator_node import orchestrator_node
+from app.orchestration.nodes.preparation_node import data_preparation_graph_node
+from app.orchestration.nodes.retrieval_preparation_node import retrieval_preparation_node
+from app.orchestration.nodes.specialist_node import _recoverable_node
+from app.orchestration.state import AnalysisState
 
-logger = logging.getLogger(__name__)
-
-
-def _timed_node(name: str, action: StateNode) -> StateNode:
-    """Add consistent per-stage timing without changing graph behaviour."""
-
-    async def instrumented(state: dict[str, Any]) -> dict[str, Any]:
-        started_at = perf_counter()
-        session_id = state.get("session_id")
-        logger.info("Pipeline stage started stage=%s session_id=%s", name, session_id)
-        try:
-            result = await action(state)
-        except Exception:
-            logger.exception(
-                "Pipeline stage failed stage=%s session_id=%s latency_ms=%.1f",
-                name,
-                session_id,
-                (perf_counter() - started_at) * 1000,
-            )
-            raise
-        logger.info(
-            "Pipeline stage completed stage=%s session_id=%s latency_ms=%.1f",
-            name,
-            session_id,
-            (perf_counter() - started_at) * 1000,
-        )
-        return result
-
-    return instrumented
-
+StateNode: TypeAlias = Callable[[AnalysisState], Awaitable[dict[str, Any]]]
 
 def build_analysis_graph(
     *,
-    generic_cleaning_node_fn: StateNodeLike | None = None,
-    data_preparation_node_fn: StateNodeLike | None = None,
-    orchestrator_node_fn: StateNodeLike | None = None,
-    node_overrides: Mapping[str, StateNodeLike] | None = None,
+    generic_cleaning_node_fn: StateNode | None = None,
+    data_preparation_node_fn: StateNode | None = None,
+    orchestrator_node_fn: StateNode | None = None,
+    node_overrides: Mapping[str, StateNode] | None = None,
 ):
     """Build the workflow through specialist analysis and output fan-in."""
-    # Importing specialist modules imports pandas and scikit-learn. Keeping that
-    # work here means importing the ASGI application only defines the workflow;
-    # it does not construct the multi-agent execution stack.
-    from langgraph.graph import END, START, StateGraph
-
-    from app.agents.multi.anomaly_detection import anomaly_detection_node
-    from app.agents.multi.dashboard_generation import dashboard_generation_node
-    from app.agents.multi.forecasting import forecasting_node
-    from app.agents.multi.insight_synthesis import insight_synthesis_node
-    from app.agents.multi.kpi_trend import kpi_trend_node
-    from app.agents.multi.orchestrator import orchestrator_node
-    from app.agents.multi.retrieval_preparation import retrieval_preparation_node
-    from app.orchestration.nodes.cleaning_node import generic_cleaning_node
-    from app.orchestration.nodes.preparation_node import data_preparation_graph_node
-    from app.orchestration.nodes.specialist_nodes import _recoverable_node
-    from app.orchestration.state import AnalysisState
-
-    overrides: dict[str, StateNodeLike] = dict(node_overrides or {})
+    overrides: dict[str, StateNode] = dict(node_overrides or {})
     if generic_cleaning_node_fn is not None:
         overrides["generic_cleaning"] = generic_cleaning_node_fn
     if data_preparation_node_fn is not None:
@@ -80,24 +37,25 @@ def build_analysis_graph(
     if orchestrator_node_fn is not None:
         overrides["orchestrator"] = orchestrator_node_fn
 
-    def selected(name: str, default: StateNodeLike) -> StateNode:
+    def selected(
+        name: str, default: StateNode
+    ) -> Callable[[AnalysisState], Awaitable[dict[str, Any]]]:
         """Choose a supplied test/custom node or the production default.
 
         This is dependency injection at graph construction time.
         """
-        return cast(StateNode, overrides.get(name, default))
+        return cast(
+            Callable[[AnalysisState], Awaitable[dict[str, Any]]],
+            overrides.get(name, default),
+        )
 
-    # Keep these as explicitly named callables instead of passing the
-    # ``Callable`` aliases above directly to LangGraph. Its type stubs require
-    # an action that accepts the keyword ``state``; ``Callable[[...], ...]``
-    # loses that parameter name and Pylance reports a false incompatibility.
-    async def generic_cleaning_action(state: dict[str, Any]) -> dict[str, Any]:
+    async def generic_cleaning_action(state: AnalysisState) -> dict[str, Any]:
         return await selected("generic_cleaning", generic_cleaning_node)(state)
 
-    async def data_preparation_action(state: dict[str, Any]) -> dict[str, Any]:
+    async def data_preparation_action(state: AnalysisState) -> dict[str, Any]:
         return await selected("data_preparation", data_preparation_graph_node)(state)
 
-    async def orchestrator_action(state: dict[str, Any]) -> dict[str, Any]:
+    async def orchestrator_action(state: AnalysisState) -> dict[str, Any]:
         return await selected("orchestrator", orchestrator_node)(state)
 
     kpi_trend_handler = _recoverable_node(
@@ -114,7 +72,7 @@ def build_analysis_graph(
         },
     )
 
-    async def kpi_trend_action(state: dict[str, Any]) -> dict[str, Any]:
+    async def kpi_trend_action(state: AnalysisState) -> dict[str, Any]:
         return await kpi_trend_handler(state)
 
     anomaly_detection_handler = _recoverable_node(
@@ -130,7 +88,7 @@ def build_analysis_graph(
         },
     )
 
-    async def anomaly_detection_action(state: dict[str, Any]) -> dict[str, Any]:
+    async def anomaly_detection_action(state: AnalysisState) -> dict[str, Any]:
         return await anomaly_detection_handler(state)
 
     forecasting_handler = _recoverable_node(
@@ -147,10 +105,10 @@ def build_analysis_graph(
         },
     )
 
-    async def forecasting_action(state: dict[str, Any]) -> dict[str, Any]:
+    async def forecasting_action(state: AnalysisState) -> dict[str, Any]:
         return await forecasting_handler(state)
 
-    async def specialist_join_action(state: dict[str, Any]) -> dict[str, Any]:
+    async def specialist_join_action(state: AnalysisState) -> dict[str, Any]:
         override = overrides.get("specialist_join")
         if override is not None:
             return await cast(StateNode, override)(state)
@@ -185,7 +143,7 @@ def build_analysis_graph(
         },
     )
 
-    async def insight_synthesis_action(state: dict[str, Any]) -> dict[str, Any]:
+    async def insight_synthesis_action(state: AnalysisState) -> dict[str, Any]:
         return await insight_synthesis_handler(state)
 
     dashboard_generation_handler = _recoverable_node(
@@ -195,7 +153,7 @@ def build_analysis_graph(
         required=True,
     )
 
-    async def dashboard_generation_action(state: dict[str, Any]) -> dict[str, Any]:
+    async def dashboard_generation_action(state: AnalysisState) -> dict[str, Any]:
         return await dashboard_generation_handler(state)
 
     retrieval_preparation_handler = _recoverable_node(
@@ -204,20 +162,20 @@ def build_analysis_graph(
         empty_update={"retrieval_documents": []},
     )
 
-    async def retrieval_preparation_action(state: dict[str, Any]) -> dict[str, Any]:
+    async def retrieval_preparation_action(state: AnalysisState) -> dict[str, Any]:
         return await retrieval_preparation_handler(state)
 
     graph = StateGraph(AnalysisState)
-    graph.add_node("generic_cleaning", _timed_node("generic_cleaning", generic_cleaning_action))
-    graph.add_node("data_preparation", _timed_node("data_preparation", data_preparation_action))
-    graph.add_node("orchestrator", _timed_node("orchestrator", orchestrator_action))
-    graph.add_node("kpi_trend", _timed_node("kpi_trend", kpi_trend_action))
-    graph.add_node("anomaly_detection", _timed_node("anomaly_detection", anomaly_detection_action))
-    graph.add_node("forecasting", _timed_node("forecasting", forecasting_action))
-    graph.add_node("specialist_join", _timed_node("specialist_join", specialist_join_action))
-    graph.add_node("insight_synthesis", _timed_node("insight_synthesis", insight_synthesis_action))
-    graph.add_node("dashboard_generation", _timed_node("dashboard_generation", dashboard_generation_action))
-    graph.add_node("retrieval_preparation", _timed_node("retrieval_preparation", retrieval_preparation_action))
+    graph.add_node("generic_cleaning", generic_cleaning_action)
+    graph.add_node("data_preparation", data_preparation_action)
+    graph.add_node("orchestrator", orchestrator_action)
+    graph.add_node("kpi_trend", kpi_trend_action)
+    graph.add_node("anomaly_detection", anomaly_detection_action)
+    graph.add_node("forecasting", forecasting_action)
+    graph.add_node("specialist_join", specialist_join_action)
+    graph.add_node("insight_synthesis", insight_synthesis_action)
+    graph.add_node("dashboard_generation", dashboard_generation_action)
+    graph.add_node("retrieval_preparation", retrieval_preparation_action)
 
     graph.add_edge(START, "generic_cleaning")
     graph.add_edge("generic_cleaning", "data_preparation")
