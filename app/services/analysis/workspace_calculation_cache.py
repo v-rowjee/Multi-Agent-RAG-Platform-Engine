@@ -53,7 +53,7 @@ class WorkspaceCalculationCache:
             dataset.id: self._files.read_dataframe(dataset.storage_path, content)
             for dataset, content in zip(datasets, contents, strict=True)
         }
-        snapshots = {
+        snapshots: dict[tuple[str, ...], WorkspaceCalculationSnapshot] = {
             (dataset.id,): self._snapshot([dataset], frames)
             for dataset in datasets
         }
@@ -104,25 +104,26 @@ class WorkspaceCalculationCache:
             normalized_frames.append(frame)
 
         dataframe = pd.concat(normalized_frames, ignore_index=True, sort=False)
+        temporal_columns = [
+            str(column)
+            for column in dataframe.columns
+            if WorkspaceCalculationCache._is_temporal_column(dataframe, str(column))
+        ]
         numeric_columns = [
             str(column)
             for column in dataframe.columns
             if column != "__source_dataset__"
+            and str(column) not in temporal_columns
             and pd.to_numeric(dataframe[column], errors="coerce").notna().any()
         ]
         dimensions = [
-            str(column) for column in dataframe.columns if str(column) not in numeric_columns
+            str(column)
+            for column in dataframe.columns
+            if str(column) not in numeric_columns
         ]
         date_field = next(
-            (
-                str(column)
-                for column in dataframe.columns
-                if any(
-                    term in str(column).casefold()
-                    for term in ("date", "time", "year", "month", "period")
-                )
-            ),
-            None,
+            (column for column in temporal_columns if "date" in column.casefold()),
+            temporal_columns[0] if temporal_columns else None,
         )
         return WorkspaceCalculationSnapshot(
             dataframe=dataframe,
@@ -133,4 +134,16 @@ class WorkspaceCalculationCache:
                     "timeField": date_field,
                 }
             },
+        )
+
+    @staticmethod
+    def _is_temporal_column(dataframe: pd.DataFrame, column: str) -> bool:
+        if column not in dataframe.columns:
+            return False
+        if pd.api.types.is_datetime64_any_dtype(dataframe[column]):
+            return True
+        normalized = re.sub(r"[^a-z0-9]+", "_", column.casefold()).strip("_")
+        return normalized in {"date", "year", "quarter", "month", "period"} or any(
+            token in normalized
+            for token in ("_date", "date_", "_time", "time_", "_period", "period_")
         )

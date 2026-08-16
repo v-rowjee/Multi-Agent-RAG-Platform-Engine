@@ -55,3 +55,25 @@ def test_prime_caches_workspace_and_named_dataset_snapshots() -> None:
     assert named is not None
     assert named.dataframe["Revenue"].tolist() == [5]
     assert named.profile["summary"]["dimensions"] == ["Region", "__source_dataset__"]
+
+
+def test_snapshot_keeps_temporal_fields_out_of_numeric_measures() -> None:
+    sales = _dataset("sales", "sales.csv")
+    cache = WorkspaceCalculationCache(DatasetFileService())
+
+    snapshot = cache._snapshot(
+        [sales],
+        {
+            "sales": pd.DataFrame(
+                {
+                    "transaction_date": pd.to_datetime(["2019-01-01", "2019-01-02"]),
+                    "year": [2019, 2019],
+                    "net_revenue_gbp": [100.0, 200.0],
+                }
+            )
+        },
+    )
+
+    assert snapshot.profile["summary"]["measures"] == ["net_revenue_gbp"]
+    assert "transaction_date" in snapshot.profile["summary"]["dimensions"]
+    assert "year" in snapshot.profile["summary"]["dimensions"]

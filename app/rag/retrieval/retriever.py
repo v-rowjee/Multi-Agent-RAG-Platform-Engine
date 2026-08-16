@@ -5,8 +5,9 @@ import logging
 import math
 import re
 import threading
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, cast
 
 import numpy as np
 import pandas as pd
@@ -18,11 +19,58 @@ from app.rag.embeddings.service import get_embedding_service
 from app.rag.models import CalculatedEvidence, IndexStatus, QueryType, RagDocument, RerankedDocument, RetrievedDocument
 from app.rag.retrieval.reranker import get_reranker
 from app.schemas.api import BusinessIntelligenceAgentInput
-from app.rag.vector_store import VectorStore, vector_store
+from app.rag.vector_store import JsonDict, VectorStore, vector_store
 
 
 logger = logging.getLogger(__name__)
 _RAG_CONFIG = get_rag_config()
+_COLUMN_UNIT_SUFFIXES = frozenset({"gbp", "usd", "eur", "aud", "cad", "pct", "percent"})
+
+
+@dataclass(frozen=True)
+class CalculationFilter:
+    column: str
+    value: str | int
+    excluded: bool = False
+
+
+def _float_value(value: object, *, default: float | None = None) -> float:
+    """Convert validated numeric response values without accepting arbitrary objects."""
+    if isinstance(value, (int, float, str)):
+        try:
+            return float(value)
+        except ValueError:
+            pass
+    if default is not None:
+        return default
+    raise ValueError(f"Expected a numeric value, received {type(value).__name__}.")
+
+
+def _normalized_words(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", value.casefold()).strip()
+
+
+def _column_aliases(column: str) -> tuple[str, ...]:
+    """Return user-facing names for a dataset field without its storage suffix."""
+    canonical = _normalized_words(column)
+    words = canonical.split()
+    aliases = [canonical]
+    while words and words[-1] in _COLUMN_UNIT_SUFFIXES:
+        words.pop()
+    if words:
+        aliases.append(" ".join(words))
+    return tuple(dict.fromkeys(alias for alias in aliases if alias))
+
+
+def _query_mentions_column(query: str, column: str) -> bool:
+    normalized_query = _normalized_words(query)
+    for alias in _column_aliases(column):
+        if len(alias) < 3:
+            continue
+        if re.search(rf"\b{re.escape(alias)}\b", normalized_query):
+            return True
+    return False
+
 
 class Retriever:
     def __init__(self, storage: VectorStore | None = None) -> None:
@@ -159,10 +207,15 @@ class Retriever:
             )
 
             if not chunked_documents:
-                replace = getattr(
+                replace_session = getattr(
                     self.storage,
                     "replace_session_document_chunks",
-                    self.storage.replace_document_chunks,
+                    None,
+                )
+                replace = (
+                    cast(Callable[[str, list[JsonDict]], int], replace_session)
+                    if callable(replace_session)
+                    else self.storage.replace_document_chunks
                 )
                 replace(session_id, [])
                 return {
@@ -186,7 +239,7 @@ class Retriever:
                     f"{expected_dimensions}-dimensional vectors."
                 )
 
-            rows: list[dict[str, object]] = []
+            rows: list[JsonDict] = []
             for document, embedding in zip(chunked_documents, embeddings):
                 metadata = dict(document.get("metadata") or {})
                 source_id = str(document["id"])
@@ -223,14 +276,19 @@ class Retriever:
                         "chunk_index": chunk_index,
                         "content": str(document["content"]),
                         "metadata": metadata,
-                        "embedding": [float(value) for value in embedding],
+                        "embedding": [_float_value(value) for value in embedding],
                     }
                 )
 
-            replace = getattr(
+            replace_session = getattr(
                 self.storage,
                 "replace_session_document_chunks",
-                self.storage.replace_document_chunks,
+                None,
+            )
+            replace = (
+                cast(Callable[[str, list[JsonDict]], int], replace_session)
+                if callable(replace_session)
+                else self.storage.replace_document_chunks
             )
             replaced_count = replace(session_id, rows)
             if replaced_count != len(rows):
@@ -346,16 +404,19 @@ class Retriever:
                 None,
             )
             if callable(match_session):
-                rows = match_session(
+                rows = cast(
+                    Callable[..., list[JsonDict]],
+                    match_session,
+                )(
                     session_id=session_id,
-                    query_embedding=[float(value) for value in query_vector],
+                    query_embedding=[_float_value(value) for value in query_vector],
                     match_count=limit,
                     match_threshold=_RAG_CONFIG.retrieval.match_threshold,
                 )
             else:
                 rows = self.storage.match_document_chunks(
                     dataset_id=session_id,
-                    query_embedding=[float(value) for value in query_vector],
+                    query_embedding=[_float_value(value) for value in query_vector],
                     match_count=limit,
                     match_threshold=_RAG_CONFIG.retrieval.match_threshold,
                 )
@@ -364,7 +425,7 @@ class Retriever:
                     RetrievedDocument(
                         page_content=str(row.get("content", "")).strip(),
                         metadata=self._result_metadata(row),
-                        score=float(row.get("similarity") or 0.0),
+                        score=_float_value(row.get("similarity"), default=0.0),
                     )
                     for row in rows
                     if str(row.get("content", "")).strip()
@@ -462,10 +523,12 @@ class Retriever:
         lowered = query.casefold()
         summary = profile.get("summary", {})
         columns = [
-            str(column).casefold()
+            str(column)
             for column in [*summary.get("measures", []), *summary.get("dimensions", [])]
         ]
-        mentions_column = any(column and column in lowered for column in columns)
+        mentions_column = any(
+            _query_mentions_column(query, column) for column in columns
+        )
         has_calc = any(
             word in lowered
             for word in (
@@ -513,8 +576,6 @@ class Retriever:
         profile: dict[str, Any],
         dataframe: pd.DataFrame | None = None,
     ) -> CalculatedEvidence | None:
-        if query_type not in {"calculation", "forecast", "comparison", "mixed"}:
-            return None
         try:
             analytics = DeterministicAnalytics(
                 agent_input=agent_input,
@@ -638,12 +699,12 @@ class DeterministicAnalytics:
             text = (
                 f"Calculated evidence:\n"
                 f"{label} {measure_label}{filter_text}: {self._format_value(measure, value)}.\n"
-                f"Source fields: {self._source_fields([*self._measure_source_fields(measure), *filters.keys()])}."
+                f"Source fields: {self._source_fields([*self._measure_source_fields(measure), *self._filter_columns(filters)])}."
             )
             reasoning = self._calculation_reasoning(
                 f"{self._filtered_frame_query(filters)}; "
                 f"{self._pandas_measure_expression('scoped', measure)}.{self._pandas_aggregation(operation)}()",
-                [*self._measure_source_fields(measure), *filters.keys()],
+                [*self._measure_source_fields(measure), *self._filter_columns(filters)],
                 f"Applied {label.lower()} to {self._measure_grounding(measure)} in `{self.agent_input.fileName}`",
             )
             direct = (
@@ -659,11 +720,11 @@ class DeterministicAnalytics:
             text = (
                 f"Calculated evidence:\n"
                 f"Distinct count of {measure_label}{filter_text}: {value:,}.\n"
-                f"Source fields: {self._source_fields([measure, *filters.keys()])}."
+                f"Source fields: {self._source_fields([measure, *self._filter_columns(filters)])}."
             )
             reasoning = self._calculation_reasoning(
                 f"{self._filtered_frame_query(filters)}; scoped[{measure!r}].dropna().nunique()",
-                [measure, *filters.keys()],
+                [measure, *self._filter_columns(filters)],
                 f"Counted distinct non-empty values in `{measure}` in `{self.agent_input.fileName}`",
             )
             direct = (
@@ -706,7 +767,7 @@ class DeterministicAnalytics:
             text = (
                 f"Calculated evidence:\n"
                 f"{item_label} {measure_label} by {dimension}{filter_text}: {values}.\n"
-                f"Source fields: {self._source_fields([*self._measure_source_fields(measure), dimension, *filters.keys()])}."
+                f"Source fields: {self._source_fields([*self._measure_source_fields(measure), dimension, *self._filter_columns(filters)])}."
             )
             reasoning = self._calculation_reasoning(
                 f"{self._filtered_frame_query(filters)}; grouped = "
@@ -714,7 +775,7 @@ class DeterministicAnalytics:
                 f"{self._pandas_measure_expression('scoped', measure)}}}).dropna()"
                 f".groupby({dimension!r})[{measure_label!r}].sum()"
                 f".sort_values(ascending={operation == 'bottom'}).head({10 if operation == 'group_by' else 1})",
-                [*self._measure_source_fields(measure), dimension, *filters.keys()],
+                [*self._measure_source_fields(measure), dimension, *self._filter_columns(filters)],
                 f"Grouped {self._measure_grounding(measure)} by `{dimension}` in `{self.agent_input.fileName}`",
             )
             direct = (
@@ -735,11 +796,11 @@ class DeterministicAnalytics:
         text = (
             f"Calculated evidence:\n"
             f"Count of rows{filter_text}: {value:,}.\n"
-            f"Source fields: {self._source_fields(list(filters.keys())) if filters else 'row count'}."
+            f"Source fields: {self._source_fields(self._filter_columns(filters)) if filters else 'row count'}."
         )
         reasoning = self._calculation_reasoning(
             f"{self._filtered_frame_query(filters)}; len(scoped)",
-            list(filters.keys()),
+            self._filter_columns(filters),
             f"Counted rows after applying the requested filters in `{self.agent_input.fileName}`",
         )
         direct = (
@@ -754,7 +815,14 @@ class DeterministicAnalytics:
         if measure is None or time_column is None:
             return None
 
-        filters = self._filters(query, exclude={time_column})
+        filters = self._filters(
+            query,
+            exclude={
+                str(column)
+                for column in self.df.columns
+                if self._is_temporal_column(str(column))
+            },
+        )
         working = self._apply_filters(self.df, filters)
         if working.empty:
             return None
@@ -783,7 +851,7 @@ class DeterministicAnalytics:
         value_text = self._format_value(measure, prediction)
         target_text = f"in {target_year}" if match else f"for the next year ({target_year})"
         source_fields = self._source_fields(
-            [time_column, *self._measure_source_fields(measure), *filters.keys()]
+            [time_column, *self._measure_source_fields(measure), *self._filter_columns(filters)]
         )
         text = (
             "Calculated evidence:\n"
@@ -797,7 +865,7 @@ class DeterministicAnalytics:
             f"{self._pandas_measure_expression('scoped', measure)}}}).dropna()"
             ".groupby('period')['value'].sum(); "
             "np.polyfit(range(len(annual)), annual, 1)",
-            [time_column, *self._measure_source_fields(measure), *filters.keys()],
+            [time_column, *self._measure_source_fields(measure), *self._filter_columns(filters)],
             f"Fitted a linear trend to annual {self._measure_grounding(measure)} using `{time_column}` from {min(years)} to {last_year}",
         )
         direct = (
@@ -806,11 +874,12 @@ class DeterministicAnalytics:
         )
         return CalculatedEvidence(text=text, direct_answer=direct)
 
-    def _filtered_frame_query(self, filters: dict[str, str | int]) -> str:
+    def _filtered_frame_query(self, filters: list[CalculationFilter]) -> str:
         if not filters:
             return "scoped = df"
         conditions = " & ".join(
-            f"df[{column!r}].eq({value!r})" for column, value in filters.items()
+            f"df[{item.column!r}].{'ne' if item.excluded else 'eq'}({item.value!r})"
+            for item in filters
         )
         return f"scoped = df[{conditions}]"
 
@@ -859,18 +928,31 @@ class DeterministicAnalytics:
             return "sum"
         return None
 
-    def _filters(self, query: str, exclude: set[str]) -> dict[str, str | int]:
-        filters: dict[str, str | int] = {}
+    def _filters(self, query: str, exclude: set[str]) -> list[CalculationFilter]:
+        filters: list[CalculationFilter] = []
         lowered = query.casefold()
         for dimension in self.dimensions[:16]:
-            if dimension in exclude or dimension not in self.df.columns:
+            if dimension not in self.df.columns:
                 continue
             unique_values = self.df[dimension].dropna().astype(str).unique()
             if len(unique_values) > 250:
                 continue
             for value in sorted(unique_values, key=len, reverse=True):
                 if value and re.search(rf"\b{re.escape(value.casefold())}\b", lowered):
-                    filters[dimension] = value
+                    excluded_value = bool(
+                        re.search(
+                            rf"\b(?:excluding|exclude|except|without|not)\s+['\"]?{re.escape(value.casefold())}\b['\"]?",
+                            lowered,
+                        )
+                    )
+                    if dimension not in exclude or excluded_value:
+                        filters.append(
+                            CalculationFilter(
+                                column=dimension,
+                                value=value,
+                                excluded=excluded_value,
+                            )
+                        )
                     break
 
         return filters
@@ -878,30 +960,28 @@ class DeterministicAnalytics:
     def _apply_filters(
         self,
         df: pd.DataFrame,
-        filters: dict[str, str | int],
+        filters: list[CalculationFilter],
     ) -> pd.DataFrame:
         working = df
-        for column, value in filters.items():
+        for item in filters:
+            column, value = item.column, item.value
             if column not in working.columns:
                 return working.iloc[0:0]
             if isinstance(value, int):
                 numeric = pd.to_numeric(working[column], errors="coerce")
-                working = working[numeric == value]
+                working = working[numeric != value] if item.excluded else working[numeric == value]
             else:
-                working = working[
-                    working[column].astype(str).str.casefold() == value.casefold()
-                ]
+                matches = working[column].astype(str).str.casefold() == value.casefold()
+                working = working[~matches if item.excluded else matches]
         return working
 
     def _query_column(self, query: str, columns: list[str]) -> str | None:
-        lowered = query.casefold()
+        lowered = _normalized_words(query)
         for column in sorted(columns, key=len, reverse=True):
-            if re.search(rf"\b{re.escape(column.casefold())}\b", lowered):
+            if _query_mentions_column(lowered, column):
                 return column
-            title = column.replace("_", " ").replace("-", " ")
-            if title.casefold() in lowered:
-                return column
-            if re.search(rf"\b{re.escape(title.casefold())}s\b", lowered):
+            title = _normalized_words(column)
+            if re.search(rf"\b{re.escape(title)}s\b", lowered):
                 return column
         if len(columns) == 1:
             return columns[0]
@@ -911,13 +991,36 @@ class DeterministicAnalytics:
         return self._query_column(query, self.measures)
 
     def _default_performance_measure(self) -> str | None:
-        return self.measures[0] if self.measures else None
+        if not self.measures:
+            return None
+        preferred_terms = (
+            "net_revenue",
+            "revenue",
+            "turnover",
+            "sales",
+            "income",
+            "profit",
+            "amount",
+        )
+        return min(
+            self.measures,
+            key=lambda measure: next(
+                (
+                    index
+                    for index, term in enumerate(preferred_terms)
+                    if term in measure.casefold().replace(" ", "_")
+                ),
+                len(preferred_terms),
+            ),
+        )
 
     def _best_dimension(self, query: str = "") -> str | None:
         candidates = [
             dimension
             for dimension in self.dimensions
-            if dimension in self.df.columns and 2 <= self.df[dimension].nunique(dropna=True) <= 50
+            if dimension in self.df.columns
+            and not self._is_temporal_column(dimension)
+            and 2 <= self.df[dimension].nunique(dropna=True) <= 50
         ]
         return candidates[0] if candidates else None
 
@@ -936,24 +1039,49 @@ class DeterministicAnalytics:
         return None
 
     def _measures(self) -> list[str]:
-        configured = [str(item) for item in self.summary.get("measures", []) if str(item) in self.df.columns]
+        configured = [
+            str(item)
+            for item in self.summary.get("measures", [])
+            if str(item) in self.df.columns and not self._is_temporal_column(str(item))
+        ]
         if configured:
             return configured
         return [
             str(column)
             for column in self.df.select_dtypes(include="number").columns
             if not self._identifier(str(column))
+            and not self._is_temporal_column(str(column))
         ]
 
     def _dimensions(self) -> list[str]:
-        configured = [str(item) for item in self.summary.get("dimensions", []) if str(item) in self.df.columns]
-        if configured:
-            return configured
+        configured = [
+            str(item)
+            for item in self.summary.get("dimensions", [])
+            if str(item) in self.df.columns
+        ]
+        temporal = [
+            str(column)
+            for column in self.df.columns
+            if self._is_temporal_column(str(column))
+        ]
+        if configured or temporal:
+            return list(dict.fromkeys([*configured, *temporal]))
         return [
             str(column)
             for column in self.df.columns
             if str(column) not in self.measures and str(column) != self.date_field
         ]
+
+    def _is_temporal_column(self, column: str) -> bool:
+        if column not in self.df.columns:
+            return False
+        if column == self.date_field or pd.api.types.is_datetime64_any_dtype(self.df[column]):
+            return True
+        normalized = re.sub(r"[^a-z0-9]+", "_", column.casefold()).strip("_")
+        return normalized in {"date", "year", "quarter", "month", "period"} or any(
+            token in normalized
+            for token in ("_date", "date_", "_time", "time_", "_period", "period_")
+        )
 
     def _date_field(self) -> str | None:
         configured = self.summary.get("timeField")
@@ -1006,16 +1134,23 @@ class DeterministicAnalytics:
         )
 
     @staticmethod
-    def _filter_text(filters: dict[str, str | int]) -> str:
-        if not filters:
-            return ""
-        return " for " + ", ".join(f"{key}={value}" for key, value in filters.items())
+    def _filter_columns(filters: list[CalculationFilter]) -> list[str]:
+        return [item.column for item in filters]
 
     @staticmethod
-    def _fields_suffix(filters: dict[str, str | int]) -> str:
+    def _filter_text(filters: list[CalculationFilter]) -> str:
         if not filters:
             return ""
-        fields = ", ".join(f"`{field}`" for field in filters)
+        return " for " + ", ".join(
+            f"{item.column}{'!=' if item.excluded else '='}{item.value}"
+            for item in filters
+        )
+
+    @staticmethod
+    def _fields_suffix(filters: list[CalculationFilter]) -> str:
+        if not filters:
+            return ""
+        fields = ", ".join(f"`{item.column}`" for item in filters)
         return f" with filters from {fields}"
 
     @staticmethod
@@ -1026,7 +1161,7 @@ class DeterministicAnalytics:
     @staticmethod
     def _number(value: object) -> str:
         try:
-            number = float(value)
+            number = _float_value(value)
         except (TypeError, ValueError):
             return str(value)
         return f"{number:,.2f}" if math.isfinite(number) else str(value)

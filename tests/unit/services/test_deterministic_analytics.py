@@ -83,6 +83,87 @@ def test_best_product_defaults_to_revenue_performance(tmp_path: Path) -> None:
     assert "groupby('Product')" in result.direct_answer
 
 
+def test_best_membership_plan_excludes_dates_and_honours_year_and_exclusion() -> None:
+    dataframe = pd.DataFrame(
+        {
+            "transaction_date": pd.to_datetime(
+                ["2019-01-01", "2019-01-02", "2019-01-03", "2020-01-01"]
+            ),
+            "year": [2019, 2019, 2019, 2020],
+            "product_category": ["Membership"] * 4,
+            "membership_plan": [
+                "Basic Annual",
+                "Premium Annual",
+                "No Membership",
+                "Corporate Annual",
+            ],
+            "net_revenue_gbp": [100.0, 225.0, 10_000.0, 50_000.0],
+        }
+    )
+    profile = {
+        "summary": {
+            # This intentionally mirrors the old workspace-cache classification.
+            "measures": ["transaction_date", "year", "net_revenue_gbp"],
+            "dimensions": ["product_category", "membership_plan"],
+            "timeField": "transaction_date",
+        }
+    }
+
+    result = DeterministicAnalytics(
+        BusinessIntelligenceAgentInput(
+            sessionId="test-session",
+            filePath="cached://workspace",
+            fileName="sales.csv",
+        ),
+        profile,
+        dataframe=dataframe,
+    ).calculate(
+        'what was the best performing membership plan excluding "no membership" in 2019'
+    )
+
+    assert result is not None and result.direct_answer is not None
+    assert "Premium Annual: 225.00" in result.direct_answer
+    assert "transaction date" not in result.direct_answer.casefold()
+    assert "year=2019" in result.direct_answer
+    assert "membership_plan!=No Membership" in result.direct_answer
+    assert ".ne('No Membership')" in result.direct_answer
+
+
+def test_total_gross_revenue_matches_a_natural_column_name_and_year() -> None:
+    dataframe = pd.DataFrame(
+        {
+            "year": [2017, 2017, 2018],
+            "gross_revenue_gbp": [100.0, 250.0, 1_000.0],
+            "net_revenue_gbp": [90.0, 225.0, 900.0],
+        }
+    )
+    profile = {
+        "summary": {
+            "measures": ["gross_revenue_gbp", "net_revenue_gbp"],
+            "dimensions": ["year"],
+            "timeField": "year",
+            "currency": "GBP",
+            "measureFormats": {"gross_revenue_gbp": "currency"},
+        }
+    }
+    query = "what the total gross revenue in 2017?"
+    result = DeterministicAnalytics(
+        BusinessIntelligenceAgentInput(
+            sessionId="test-session",
+            filePath="cached://workspace",
+            fileName="sales.csv",
+        ),
+        profile,
+        dataframe=dataframe,
+    ).calculate(query)
+
+    assert Retriever().route_query(query, profile) == "calculation"
+    assert result is not None and result.direct_answer is not None
+    assert "350.00" in result.direct_answer
+    assert "year=2017" in result.direct_answer
+    assert "gross_revenue_gbp" in result.direct_answer
+
+
 def test_generic_forecast_question_forecasts_next_year_revenue(tmp_path: Path) -> None:
     result = _analytics(tmp_path).calculate("What forecast information is available?")
 

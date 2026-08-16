@@ -11,8 +11,29 @@ logger = logging.getLogger(__name__)
 JsonDict = dict[str, object]
 
 class VectorStore(Protocol):
-    def replace_session_document_chunks(self, session_id: str, chunks: list[dict]) -> None: ...
-    def match_session_document_chunks(self, session_id: str, query_embedding: list[float], match_count: int, match_threshold: float) -> list[dict]: ...
+    def replace_document_chunks(self, dataset_id: str, chunks: list[JsonDict]) -> int: ...
+
+    def replace_session_document_chunks(
+        self,
+        session_id: str,
+        chunks: list[JsonDict],
+    ) -> int: ...
+
+    def match_document_chunks(
+        self,
+        dataset_id: str,
+        query_embedding: list[float],
+        match_count: int,
+        match_threshold: float,
+    ) -> list[JsonDict]: ...
+
+    def match_session_document_chunks(
+        self,
+        session_id: str,
+        query_embedding: list[float],
+        match_count: int,
+        match_threshold: float,
+    ) -> list[JsonDict]: ...
 
 class SupabaseVectorStore:
     def __init__(self, gateway: SupabaseGateway | None = None) -> None:
