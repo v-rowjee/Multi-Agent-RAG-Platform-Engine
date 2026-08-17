@@ -11,6 +11,7 @@ from typing import Any
 
 import pandas as pd
 from app.core.config import Settings
+from app.core.tracing import analysis_run_config
 from app.schemas.api import ApiMessage, DashboardResponse
 from app.services.analysis.dashboards import DashboardAssembler
 from app.services.analysis.files import DatasetFileService
@@ -217,7 +218,10 @@ class AnalysisPipelineRunner:
         logger.info("Multi-agent pipeline started session_id=%s", session_id)
         started_at = perf_counter()
         try:
-            result = await (graph or self.graph).ainvoke(initial_state)
+            result = await (graph or self.graph).ainvoke(
+                initial_state,
+                config=analysis_run_config(session_id=session_id, dataset_id=dataset.id),
+            )
             dashboard_output = result.get("dashboard_output")
             if not isinstance(dashboard_output, dict):
                 raise ValueError("The workflow did not return a dashboard output.")

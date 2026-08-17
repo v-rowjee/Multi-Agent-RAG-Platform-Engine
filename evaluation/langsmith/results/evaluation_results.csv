@@ -1,0 +1,2 @@
+test_case_id,category,configuration,run_number,workflow_success,route_correct,trajectory_valid,structured_output_valid,recovery_success,latency_seconds,execution_error
+sales-overview,tabular-business-analysis,multi_agent,1,True,True,True,False,True,84.22466519998852,

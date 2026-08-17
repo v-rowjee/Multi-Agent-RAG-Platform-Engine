@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.core.config import agent_model_policy, get_rag_config
+from app.core.tracing import chat_run_config
 from app.rag.models import RetrievedDocument
 from app.schemas.specialists import GroundedChatDraft
 
@@ -441,6 +442,7 @@ class ChatGraph:
         history: list[dict[str, str]] | None = None,
     ) -> ChatResult:
         result = self._graph_instance().invoke(
-            {"session_id": session_id, "query": query, "history": history or []}
+            {"session_id": session_id, "query": query, "history": history or []},
+            config=chat_run_config(session_id=session_id),
         )
         return ChatResult(query=result["query"], draft=result["draft"])

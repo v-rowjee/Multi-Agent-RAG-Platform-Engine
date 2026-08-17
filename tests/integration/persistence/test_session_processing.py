@@ -92,7 +92,9 @@ class WorkspaceGraph:
     def __init__(self) -> None:
         self.workspace: Path | None = None
 
-    async def ainvoke(self, state: dict[str, Any]) -> dict[str, Any]:
+    async def ainvoke(
+        self, state: dict[str, Any], *, config: dict[str, Any]
+    ) -> dict[str, Any]:
         self.workspace = Path(state["working_directory"])
         assert self.workspace.is_dir()
         assert "app/storage/sessions" not in self.workspace.as_posix()

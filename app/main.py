@@ -22,7 +22,7 @@ async def lifespan(_: FastAPI) -> AsyncGenerator[None]:
 
 
 app = FastAPI(
-    title="MARP API",
+    title="MARS API",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -52,4 +52,4 @@ async def ready() -> dict[str, str]:
 
 @app.get("/")
 async def root() -> dict[str, str]:
-    return {"message": "MARP API is running"}
+    return {"message": "MARS API is running"}

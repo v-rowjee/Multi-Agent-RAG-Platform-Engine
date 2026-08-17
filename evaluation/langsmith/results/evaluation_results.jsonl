@@ -1,0 +1,1 @@
+{"test_case_id": "sales-overview", "category": "tabular-business-analysis", "configuration": "multi_agent", "run_number": 1, "workflow_success": true, "route_correct": true, "trajectory_valid": true, "structured_output_valid": false, "recovery_success": true, "latency_seconds": 84.22466519998852, "execution_error": null}

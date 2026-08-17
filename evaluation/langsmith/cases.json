@@ -1,0 +1,14 @@
+{
+  "cases": [
+    {
+      "id": "sales-overview",
+      "category": "tabular-business-analysis",
+      "input": {
+        "dataset_path": "evaluation/data/sme_gym_sales_2015_2025-1.csv",
+        "business_description": "Analyse sales performance, trends, anomalies, and a business dashboard."
+      },
+      "route_match_mode": "contains",
+      "expected_route": ["kpi_trend", "anomaly_detection", "forecasting"]
+    }
+  ]
+}

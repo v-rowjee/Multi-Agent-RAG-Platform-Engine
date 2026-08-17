@@ -227,7 +227,9 @@ def test_failed_graph_returns_failed_dashboard_response(
     )
 
     class FailedWorkflowGraph:
-        async def ainvoke(self, state: dict[str, Any]) -> dict[str, Any]:
+        async def ainvoke(
+            self, state: dict[str, Any], *, config: dict[str, Any]
+        ) -> dict[str, Any]:
             return {
                 **state,
                 "workflow_status": "failed",
