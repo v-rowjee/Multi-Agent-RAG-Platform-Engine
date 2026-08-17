@@ -1,0 +1,21 @@
+{
+  "suite": "dashboard_planning_eval",
+  "cases": [
+    {
+      "id": "numeric-without-dates",
+      "target": "orchestrator_node",
+      "inputs": {"prepared_dataset": {"dataset_profile": {"row_count": 8, "column_profiles": [{"name": "product", "inferred_type": "categorical"}, {"name": "revenue", "inferred_type": "numeric"}]}, "primary_measures": ["revenue"], "temporal_profile": {}}},
+      "reference_outputs": {"allowed_agents": ["kpi_trend", "anomaly_detection"]},
+      "metrics": ["planner_appropriateness"],
+      "metadata": {"component": "dashboard", "level": "node"}
+    },
+    {
+      "id": "text-only-feedback",
+      "target": "orchestrator_node",
+      "inputs": {"prepared_dataset": {"dataset_profile": {"row_count": 4, "column_profiles": [{"name": "comment", "inferred_type": "text"}]}, "primary_measures": [], "temporal_profile": {}}},
+      "reference_outputs": {"allowed_agents": []},
+      "metrics": ["planner_appropriateness"],
+      "metadata": {"component": "dashboard", "level": "node"}
+    }
+  ]
+}

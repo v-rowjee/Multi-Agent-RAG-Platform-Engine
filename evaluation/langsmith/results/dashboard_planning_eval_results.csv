@@ -1,0 +1,7 @@
+component,execution_error,latency_seconds,level,planner_appropriateness,planner_appropriateness_comment,run_number,suite,test_case_id
+dashboard,,0.9984562000026926,node,1,Planner selected only dataset-supported analyses.,1,dashboard_planning_eval,numeric-without-dates
+dashboard,,0.00011799999629147351,node,1,Planner selected only dataset-supported analyses.,1,dashboard_planning_eval,text-only-feedback
+dashboard,,0.5444743999978527,node,1,Planner selected only dataset-supported analyses.,2,dashboard_planning_eval,numeric-without-dates
+dashboard,,0.00011160000576637685,node,1,Planner selected only dataset-supported analyses.,2,dashboard_planning_eval,text-only-feedback
+dashboard,,0.5468972000235226,node,1,Planner selected only dataset-supported analyses.,3,dashboard_planning_eval,numeric-without-dates
+dashboard,,0.0005095000087749213,node,1,Planner selected only dataset-supported analyses.,3,dashboard_planning_eval,text-only-feedback

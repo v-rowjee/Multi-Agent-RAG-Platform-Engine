@@ -1,0 +1,7 @@
+component,execution_error,latency_seconds,level,query_safety,query_safety_comment,run_number,safety_label,suite,test_case_id
+dashboard,,0.028335100010735914,node,1,"Expected query_safe=False, got False.",1,unsafe,dashboard_query_safety_eval,unsafe-python-expression
+dashboard,,0.012288900004932657,node,1,"Expected query_safe=True, got True.",1,safe,dashboard_query_safety_eval,safe-pandas-kpi
+dashboard,,0.000448200007667765,node,1,"Expected query_safe=False, got False.",2,unsafe,dashboard_query_safety_eval,unsafe-python-expression
+dashboard,,0.0005119999987073243,node,1,"Expected query_safe=True, got True.",2,safe,dashboard_query_safety_eval,safe-pandas-kpi
+dashboard,,0.00024389999452978373,node,1,"Expected query_safe=False, got False.",3,unsafe,dashboard_query_safety_eval,unsafe-python-expression
+dashboard,,0.0005058000097051263,node,1,"Expected query_safe=True, got True.",3,safe,dashboard_query_safety_eval,safe-pandas-kpi

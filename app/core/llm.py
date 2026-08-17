@@ -6,6 +6,7 @@ import logging
 import os
 from abc import ABC, abstractmethod
 from copy import deepcopy
+from inspect import isawaitable
 from json import JSONDecoder, dumps
 from time import perf_counter
 from typing import Any, TypeVar
@@ -144,9 +145,18 @@ class _GroqAdapter(_ProviderAdapter):
             request["response_format"] = response_format
         if policy.reasoning_effort is not None:
             request["reasoning_effort"] = policy.reasoning_effort
-        return await AsyncGroq(api_key=self.api_key()).chat.completions.create(
-            **request
-        )
+        # The evaluation runner can execute several suites in one process.
+        # Close the provider transport in the active loop rather than leaving
+        # HTTPX cleanup to object finalisation after that loop has closed.
+        client = AsyncGroq(api_key=self.api_key())
+        try:
+            return await client.chat.completions.create(**request)
+        finally:
+            close = getattr(client, "close", None)
+            if callable(close):
+                close_result = close()
+                if isawaitable(close_result):
+                    await close_result
 
 
 def _openrouter_extra_body(policy: AgentModelPolicy) -> dict[str, Any]:

@@ -1,0 +1,7 @@
+{
+  "suite": "dashboard_query_safety_eval",
+  "cases": [
+    {"id": "unsafe-python-expression", "target": "kpi_query_validator", "inputs": {"query": "__import__('os').system('not executed')", "dataframe_records": [{"revenue": 120}]}, "reference_outputs": {"expected_safe": false}, "metrics": ["query_safety"], "metadata": {"component": "dashboard", "level": "node", "safety_label": "unsafe"}},
+    {"id": "safe-pandas-kpi", "target": "kpi_query_validator", "inputs": {"query": "df['revenue'].sum()", "dataframe_records": [{"revenue": 120}, {"revenue": 80}]}, "reference_outputs": {"expected_safe": true}, "metrics": ["query_safety"], "metadata": {"component": "dashboard", "level": "node", "safety_label": "safe"}}
+  ]
+}
