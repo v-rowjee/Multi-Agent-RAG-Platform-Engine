@@ -5,11 +5,11 @@ import pandas as pd
 from app.agents.multi.data_preparation import prepare_dataset
 from app.core.exceptions import DataPreparationError
 from app.core.model_policy import agent_model_usage
-from app.schemas.data_preparation import GenericCleaningResult
 from app.orchestration.state import AnalysisState
+from app.schemas.data_preparation import GenericCleaningResult
 
 
-async def data_preparation_graph_node(
+async def data_preparation_node(
     state: AnalysisState,
 ) -> dict[str, Any]:
     session_id = str(state.get("session_id") or state.get("sessionId") or "").strip()

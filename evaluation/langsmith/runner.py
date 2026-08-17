@@ -12,8 +12,11 @@ from typing import Any, ContextManager
 
 import pandas as pd
 
-from app.core.tracing import analysis_run_config
+from app.core.tracing import analysis_run_config, chat_run_config
 from app.orchestration.graphs.analysis_graph import get_analysis_graph
+from app.orchestration.graphs.chat_graph import build_chat_graph
+from app.rag.models import RerankedDocument, RetrievedDocument
+from app.schemas.specialists import GroundedChatDraft
 from app.services.data.cleaning import generic_clean_dataframe
 from evaluation.langsmith.cases import EvaluationCase, load_cases
 from evaluation.langsmith.evaluators import evaluate_result
@@ -21,6 +24,47 @@ from evaluation.langsmith.results import EvaluationRecord, write_results
 
 _DEFAULT_CASES = Path("evaluation/langsmith/cases.json")
 _DEFAULT_RESULTS = Path("evaluation/langsmith/results")
+
+
+class _CaseRetrieval:
+    """Deterministic retrieval fixture used by serializable chat evaluations."""
+
+    def __init__(
+        self,
+        documents: list[RetrievedDocument],
+        reranked_documents: list[RetrievedDocument] | None = None,
+    ) -> None:
+        self._documents = documents
+        self._reranked_documents = reranked_documents
+
+    def retrieve(
+        self, session_id: str, query: str, limit: int
+    ) -> list[RetrievedDocument]:
+        del session_id, query, limit
+        return list(self._documents)
+
+    def rerank(
+        self, query: str, documents: list[RetrievedDocument]
+    ) -> list[RetrievedDocument]:
+        del query
+        return list(self._reranked_documents or documents)
+
+
+class _CaseChatAgent:
+    """Return the expected draft without making an external model call."""
+
+    def __init__(self, draft: GroundedChatDraft) -> None:
+        self._draft = draft
+
+    async def run(
+        self,
+        session_id: str,
+        query: str,
+        retrieved_documents: list[RetrievedDocument],
+        history: list[dict[str, str]] | None = None,
+    ) -> GroundedChatDraft:
+        del session_id, query, retrieved_documents, history
+        return self._draft
 
 
 def _tracing_enabled() -> bool:
@@ -91,21 +135,92 @@ def _initial_state(case: EvaluationCase) -> dict[str, Any]:
     }
 
 
+def _chat_document(value: Any) -> RetrievedDocument:
+    if not isinstance(value, dict):
+        raise ValueError("Chat documents must be objects.")
+    page_content = str(value.get("page_content") or "").strip()
+    metadata = value.get("metadata")
+    if not page_content or not isinstance(metadata, dict):
+        raise ValueError("Chat documents require page_content and object metadata.")
+    score = float(value.get("score", 0.0))
+    reranker_score = value.get("reranker_score")
+    if reranker_score is None:
+        return RetrievedDocument(page_content=page_content, metadata=metadata, score=score)
+    return RerankedDocument(
+        page_content=page_content,
+        metadata=metadata,
+        score=score,
+        reranker_score=float(reranker_score),
+    )
+
+
+async def _execute_chat_case(case: EvaluationCase) -> dict[str, Any]:
+    payload = case.input_for("chat")
+    session_id = str(payload.get("session_id") or f"evaluation-{case.test_case_id}")
+    query = str(payload.get("query") or "").strip()
+    if not query:
+        raise ValueError("Chat input requires a query.")
+    documents = [_chat_document(item) for item in payload.get("documents", [])]
+    reranked = payload.get("reranked_documents")
+    if reranked is not None and not isinstance(reranked, list):
+        raise ValueError("reranked_documents must be a list when provided.")
+    draft_payload = payload.get("generated_draft")
+    agent = None
+    if draft_payload is not None:
+        agent = _CaseChatAgent(GroundedChatDraft.model_validate(draft_payload))
+    graph = build_chat_graph(
+        rag=_CaseRetrieval(
+            documents,
+            [_chat_document(item) for item in reranked] if reranked is not None else None,
+        ),
+        agent=agent,
+    )
+    completed_nodes: list[str] = []
+    final_state: dict[str, Any] = {}
+    async for update in graph.astream(
+        {
+            "session_id": session_id,
+            "query": query,
+            "history": payload.get("history") or [],
+        },
+        config=chat_run_config(session_id=session_id),
+        stream_mode="updates",
+    ):
+        if isinstance(update, dict):
+            completed_nodes.extend(str(node) for node in update)
+            for node_update in update.values():
+                if isinstance(node_update, dict):
+                    final_state.update(node_update)
+    return {
+        "workflow_status": "complete",
+        "route": completed_nodes,
+        "completed_agents": completed_nodes,
+        "failed_agents": [],
+        **final_state,
+    }
+
+
 async def execute_case(case: EvaluationCase, run_number: int) -> EvaluationRecord:
-    """Execute one existing graph and return its deterministic metrics."""
+    """Execute one declared graph configuration and score its deterministic checks."""
     started_at = perf_counter()
     result: dict[str, Any] = {}
     error: str | None = None
     try:
-        state = _initial_state(case)
-        with _evaluation_trace_context(case.trace_metadata("multi_agent", run_number)):
-            result = await get_analysis_graph().ainvoke(
-                state,
-                config=analysis_run_config(
-                    session_id=str(state["session_id"]),
-                    dataset_id=str(state["dataset_id"]),
-                ),
-            )
+        if case.configuration == "multi_agent":
+            state = _initial_state(case)
+            with _evaluation_trace_context(
+                case.trace_metadata("multi_agent", run_number)
+            ):
+                result = await get_analysis_graph().ainvoke(
+                    state,
+                    config=analysis_run_config(
+                        session_id=str(state["session_id"]),
+                        dataset_id=str(state["dataset_id"]),
+                    ),
+                )
+        else:
+            with _evaluation_trace_context(case.trace_metadata("chat", run_number)):
+                result = await _execute_chat_case(case)
         scores = evaluate_result(case, result)
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
@@ -119,7 +234,7 @@ async def execute_case(case: EvaluationCase, run_number: int) -> EvaluationRecor
     return EvaluationRecord(
         test_case_id=case.test_case_id,
         category=case.category,
-        configuration="multi_agent",
+        configuration=case.configuration,
         run_number=run_number,
         latency_seconds=perf_counter() - started_at,
         execution_error=error,

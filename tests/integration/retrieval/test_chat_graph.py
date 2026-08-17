@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 import pytest
 
-import app.orchestration.graphs.chat_graph as chat_service_module
+import app.orchestration.nodes.chat_nodes as chat_nodes_module
 from app.agents.multi.chat import INSUFFICIENT_CONTEXT_ANSWER
 from app.core.config import Settings
 from app.rag.models import RetrievedDocument
@@ -388,7 +388,7 @@ def test_multi_chat_returns_retrieved_recommendations_when_generation_times_out(
         rag=DummyRag(documents),
         multi_chat_agent=SlowChatAgent(),
     )
-    monkeypatch.setattr(chat_service_module, "_CHAT_AGENT_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(chat_nodes_module, "CHAT_AGENT_TIMEOUT_SECONDS", 0.01)
 
     response = service.chat(
         SESSION_ID,

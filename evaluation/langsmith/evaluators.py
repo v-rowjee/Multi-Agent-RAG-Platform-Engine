@@ -39,9 +39,23 @@ def recovery_success(case: EvaluationCase, result: dict[str, Any]) -> bool:
     return set(case.expected_failed_nodes).issubset(failed) and result.get("workflow_status") != "failed"
 
 
-def structured_output_valid(result: dict[str, Any]) -> bool:
-    """Ensure an execution exposed the minimum workflow result contract."""
-    return isinstance(result.get("workflow_status"), str) and isinstance(result.get("completed_agents"), list)
+def structured_output_valid(case: EvaluationCase, result: dict[str, Any]) -> bool:
+    """Ensure the workflow contract and any declared chat-draft checks hold."""
+    if not (
+        isinstance(result.get("workflow_status"), str)
+        and isinstance(result.get("completed_agents"), list)
+    ):
+        return False
+    if case.configuration != "chat":
+        return True
+
+    expected_draft = case.input_for("chat").get("expected_draft")
+    if expected_draft is None:
+        return True
+    if not isinstance(expected_draft, dict):
+        return False
+    draft = result.get("draft")
+    return all(getattr(draft, field, object()) == value for field, value in expected_draft.items())
 
 
 def evaluate_result(case: EvaluationCase, result: dict[str, Any]) -> dict[str, bool]:
@@ -50,6 +64,6 @@ def evaluate_result(case: EvaluationCase, result: dict[str, Any]) -> dict[str, b
         "workflow_success": result.get("workflow_status") != "failed",
         "route_correct": route_correct(case, result),
         "trajectory_valid": trajectory_valid(case, result),
-        "structured_output_valid": structured_output_valid(result),
+        "structured_output_valid": structured_output_valid(case, result),
         "recovery_success": recovery_success(case, result),
     }

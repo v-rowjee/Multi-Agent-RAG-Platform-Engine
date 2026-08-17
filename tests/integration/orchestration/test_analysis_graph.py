@@ -3,12 +3,16 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
+import app.orchestration.graphs.analysis_graph as analysis_graph_module
 from app.orchestration.graphs.analysis_graph import (
     build_analysis_graph,
 )
+from app.orchestration.nodes.anomaly_detection_node import anomaly_detection_node
+from app.orchestration.nodes.kpi_trend_node import kpi_trend_node
 from app.schemas.orchestration import OrchestrationPlan
 
 
@@ -42,6 +46,25 @@ def _node(
         return result
 
     return run
+
+
+def _graph_patches(overrides: dict[str, Callable[[dict[str, Any]], Any]]) -> dict[str, Any]:
+    return {
+        "generic_cleaning_node": overrides["generic_cleaning"],
+        "data_preparation_node": overrides["data_preparation"],
+        "orchestrator_node": overrides["orchestrator"],
+        "kpi_trend_node": overrides["kpi_trend"],
+        "anomaly_detection_node": overrides["anomaly_detection"],
+        "specialist_join_node": overrides["specialist_join"],
+        "insight_synthesis_node": overrides["insight_synthesis"],
+        "dashboard_generation_node": overrides["dashboard_generation"],
+        "retrieval_preparation_node": overrides["retrieval_preparation"],
+        **(
+            {"forecasting_node": overrides["forecasting"]}
+            if "forecasting" in overrides
+            else {}
+        ),
+    }
 
 
 def _run_graph(
@@ -96,7 +119,6 @@ def _run_graph(
             events,
             {"forecasting_output": {"forecast": []}},
         )
-    graph = build_analysis_graph(node_overrides=overrides)
     initial_state: dict[str, Any] = {
         "session_id": "session",
         "dataset_id": "session",
@@ -108,7 +130,8 @@ def _run_graph(
     }
     if file_name is not None:
         initial_state["file_name"] = file_name
-    result = asyncio.run(graph.ainvoke(initial_state))
+    with patch.multiple(analysis_graph_module, **_graph_patches(overrides)):
+        result = asyncio.run(build_analysis_graph().ainvoke(initial_state))
     return result, events
 
 
@@ -188,7 +211,7 @@ def test_graph_uses_explicit_specialist_fan_in_and_two_terminal_branches() -> No
     assert all("output_join" not in edge for edge in edges)
 
 
-def test_optional_specialist_exception_reaches_output_as_failure_state() -> None:
+def test_specialist_exception_propagates_without_a_graph_wrapper() -> None:
     events: list[str] = []
 
     async def failing_kpi(state: dict[str, Any]) -> dict[str, Any]:
@@ -223,25 +246,33 @@ def test_optional_specialist_exception_reaches_output_as_failure_state() -> None
             "retrieval_preparation", events, {"retrieval_documents": []}
         ),
     }
-    graph = build_analysis_graph(node_overrides=overrides)
-    result = asyncio.run(
-        graph.ainvoke(
-            {
-                "session_id": "session",
-                "dataset_id": "session",
-                "warnings": [],
-                "errors": [],
-                "completed_agents": [],
-                "failed_agents": [],
-                "skipped_agents": [],
-            }
-        )
-    )
+    with pytest.raises(RuntimeError, match="specialist unavailable"):
+        with patch.multiple(analysis_graph_module, **_graph_patches(overrides)):
+            asyncio.run(
+                build_analysis_graph().ainvoke(
+                {
+                    "session_id": "session",
+                    "dataset_id": "session",
+                    "warnings": [],
+                    "errors": [],
+                    "completed_agents": [],
+                    "failed_agents": [],
+                    "skipped_agents": [],
+                }
+                )
+            )
 
-    assert "kpi_trend" in result["failed_agents"]
-    assert result["kpi_trend_output"]["status"] == "partial"
-    assert events.count("specialist_join") == 1
-    assert events.count("insight_synthesis") == 1
-    assert events.count("dashboard_generation") == 1
-    assert events.count("retrieval_preparation") == 1
+
+def test_unselected_specialists_return_skipped_outputs_without_running_agents() -> None:
+    state = {"orchestration_plan": {"selected_agents": []}}
+
+    kpi_result = asyncio.run(kpi_trend_node(state))
+    anomaly_result = asyncio.run(anomaly_detection_node(state))
+
+    assert kpi_result["skipped_agents"] == ["kpi_trend"]
+    assert kpi_result["kpi_trend_output"]["kpis"] == []
+    assert "was skipped" in kpi_result["kpi_trend_output"]["limitations"][0]
+    assert anomaly_result["skipped_agents"] == ["anomaly_detection"]
+    assert anomaly_result["anomaly_output"]["anomalies"] == []
+    assert "was skipped" in anomaly_result["anomaly_output"]["limitations"][0]
 

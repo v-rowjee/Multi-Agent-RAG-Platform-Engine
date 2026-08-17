@@ -5,14 +5,13 @@ from typing import Any
 
 from app.agents.multi.forecasting import ForecastingError, forecast
 from app.core.model_policy import forecasting_model_usage
+from app.orchestration.nodes.specialist_node import is_specialist_selected
 from app.orchestration.state import AnalysisState
 from app.schemas.specialists import ForecastingOutput
 
 
 async def forecasting_node(state: AnalysisState) -> dict[str, Any]:
-    plan = state.get("orchestration_plan")
-    selected_agents = plan.get("selected_agents", []) if isinstance(plan, dict) else None
-    if isinstance(selected_agents, list) and "forecasting" not in selected_agents:
+    if not is_specialist_selected(state, "forecasting"):
         result = ForecastingOutput(
             status="skipped",
             limitations=[

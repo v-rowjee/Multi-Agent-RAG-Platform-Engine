@@ -5,11 +5,24 @@ from typing import Any
 from app.agents.multi.kpi_trend import KPITrendError, analyze_kpi_trends
 from app.core.llm import safe_model_failure_reason
 from app.core.model_policy import agent_model_usage
+from app.orchestration.nodes.specialist_node import is_specialist_selected
 from app.orchestration.state import AnalysisState
 from app.schemas.specialists import KPITrendOutput
 
 
 async def kpi_trend_node(state: AnalysisState) -> dict[str, Any]:
+    if not is_specialist_selected(state, "kpi_trend"):
+        result = KPITrendOutput(
+            status="partial",
+            limitations=[
+                "KPI and trend analysis was skipped because the dataset does not support it."
+            ],
+        )
+        return {
+            "kpi_trend_output": result.model_dump(mode="json"),
+            "completed_agents": ["kpi_trend"],
+            "skipped_agents": ["kpi_trend"],
+        }
     try:
         result, execution_status, failure_reason = await analyze_kpi_trends(
             state.get("prepared_dataset", {}), state.get("prepared_dataframe")

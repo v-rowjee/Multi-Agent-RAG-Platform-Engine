@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 RouteMatchMode = Literal["exact", "contains"]
+EvaluationConfiguration = Literal["multi_agent", "chat"]
 
 
 @dataclass(frozen=True)
@@ -17,6 +18,7 @@ class EvaluationCase:
     test_case_id: str
     category: str
     input: dict[str, Any]
+    configuration: EvaluationConfiguration = "multi_agent"
     expected_route: tuple[str, ...] = ()
     acceptable_trajectories: tuple[tuple[str, ...], ...] = ()
     route_match_mode: RouteMatchMode = "exact"
@@ -40,10 +42,14 @@ class EvaluationCase:
         route_match_mode = value.get("route_match_mode", "exact")
         if route_match_mode not in {"exact", "contains"}:
             raise ValueError("route_match_mode must be 'exact' or 'contains'.")
+        configuration = value.get("configuration", "multi_agent")
+        if configuration not in {"multi_agent", "chat"}:
+            raise ValueError("configuration must be 'multi_agent' or 'chat'.")
         return cls(
             test_case_id=identifier,
             category=category,
             input=raw_input,
+            configuration=configuration,
             expected_route=tuple(str(item) for item in value.get("expected_route", [])),
             acceptable_trajectories=tuple(tuple(str(node) for node in item) for item in trajectories),
             route_match_mode=route_match_mode,

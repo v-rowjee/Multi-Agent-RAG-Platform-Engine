@@ -1,2 +1,11 @@
 test_case_id,category,configuration,run_number,workflow_success,route_correct,trajectory_valid,structured_output_valid,recovery_success,latency_seconds,execution_error
-sales-overview,tabular-business-analysis,multi_agent,1,True,True,True,False,True,84.22466519998852,
+sales-overview,tabular-business-analysis,multi_agent,1,True,True,True,False,True,122.53532130000531,
+numeric-catalog-no-forecast,tabular-capability-routing,multi_agent,1,True,True,True,False,True,36.29056200000923,
+short-numeric-sample,tabular-capability-routing,multi_agent,1,True,True,True,False,True,56.70149950002087,
+text-only-feedback,tabular-capability-routing,multi_agent,1,True,True,True,False,True,25.676871299976483,
+chat-blocked-prompt-injection,chat-guardrail,chat,1,True,True,True,True,True,0.047426999983144924,
+chat-empty-retrieval,chat-insufficient-context,chat,1,True,True,True,True,True,0.04581880001933314,
+chat-negative-reranked-evidence,chat-insufficient-context,chat,1,True,True,True,True,True,0.05539269998553209,
+chat-grounded-kpi,chat-grounded-generation,chat,1,True,True,True,True,True,0.0555317000253126,
+chat-unsupported-numeric-claim,chat-grounding-safety,chat,1,True,True,True,True,True,0.06762489999528043,
+chat-causal-claim-without-evidence,chat-causal-grounding,chat,1,True,True,True,True,True,0.051072899979772046,
