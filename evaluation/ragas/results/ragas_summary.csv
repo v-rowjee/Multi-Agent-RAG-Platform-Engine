@@ -1,0 +1,15 @@
+metric,component,mean,median,min,max,successful_cases,applicable_cases
+Context Precision,RAG retrieval/reranking,,,,,0,15
+Context Recall,RAG retrieval,,,,,0,15
+Faithfulness,Chat generation,,,,,0,19
+Factual Correctness,Final answer,,,,,0,15
+Precision@8,Vector retrieval,0.1,0.125,0.0,0.25,15,15
+Recall@8,Vector retrieval,0.7333333333333333,1.0,0.0,1.0,15,15
+MRR Before Reranking,Vector retrieval,0.6833333333333333,1.0,0.0,1.0,15,15
+MRR After Reranking,Reranker,0.6666666666666666,1.0,0.0,1.0,15,15
+NDCG@8,Vector retrieval,0.684148745843801,1.0,0.0,1.0,15,15
+NDCG@4 After,Reranker,0.6583337799938915,1.0,0.0,1.0,15,15
+Precision@4 Before,Vector retrieval,0.18333333333333332,0.25,0.0,0.25,15,15
+Precision@4 After,Reranker,0.18333333333333332,0.25,0.0,0.25,15,15
+NDCG@4 Before,Vector retrieval,0.6695882500559234,1.0,0.0,1.0,15,15
+NDCG@4 After,Reranker,0.6583337799938915,1.0,0.0,1.0,15,15
