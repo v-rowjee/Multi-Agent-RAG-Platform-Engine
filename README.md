@@ -1,229 +1,428 @@
-# Business Intelligence Backend
+<div align="center">
+<pre>
+███╗   ███╗ █████╗ ██████╗ ███████╗
+████╗ ████║██╔══██╗██╔══██╗██╔════╝
+██╔████╔██║███████║██████╔╝███████╗
+██║╚██╔╝██║██╔══██║██╔══██╗╚════██║
+██║ ╚═╝ ██║██║  ██║██║  ██║███████║
+╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝
+</pre>
+</div>
 
-## Run
+# MARS — Multi-Agent RAG System
+
+MARS is a business-intelligence application that turns uploaded tabular data
+into a dashboard, recommendations, and grounded follow-up answers. It is built
+for people who need useful answers from their own data without treating a
+language model as the source of truth: calculations, retrieval, source IDs,
+guardrails, and validation sit around the model calls.
+
+The backend is a FastAPI service. Its default `multi` mode uses a LangGraph
+workflow of specialist agents; a compatible `single` mode is also available for
+comparison or a simpler deployment. Supabase supplies authentication, dataset
+storage, persistence, and vector search.
+
+## What happens when a dataset is uploaded
+
+1. A signed-in user uploads one or more CSV, Excel, or JSON files.
+2. MARS stores the files in the user's workspace, combines them where needed,
+   and prepares a clean in-memory data frame.
+3. The analysis workflow builds a dashboard with KPIs, charts, insights, and
+   recommended actions.
+4. MARS creates retrieval documents from the completed analysis and indexes
+   them for the workspace.
+5. The user can ask questions about that workspace. Answers are based on its
+   retrieved evidence, or MARS says when the evidence is insufficient.
+
+This makes “multi-agent” practical here: agents have defined jobs, structured
+inputs/outputs, and an orchestrated hand-off rather than an unconstrained group
+chat.
+
+## Key capabilities
+
+- Workspace-scoped analysis of CSV, XLS/XLSX, and JSON tabular datasets.
+- Multi-agent dashboard generation with data preparation, planning, specialist
+  analysis, synthesis, and dashboard assembly.
+- Dataset chat protected by prompt-injection guardrails, vector retrieval,
+  reranking, grounded generation, and source validation.
+- Deterministic calculations for supported numerical questions, so simple
+  calculations need not depend on an LLM.
+- Supabase-backed authentication, storage, analysis persistence, messages, and
+  vector retrieval.
+- LangSmith quality experiments, RAGAS retrieval/answer evaluation, and Python
+  unit, integration, and end-to-end tests.
+
+## System overview
+
+```mermaid
+flowchart LR
+    U[User and web UI] -->|authenticated API calls| API[FastAPI /api]
+    API --> WS[Workspace service]
+    WS --> DB[(Supabase\nAuth, Storage, Postgres)]
+    WS --> A[Analysis workflow]
+    A --> D[Dashboard and insights]
+    A --> I[Index analysis documents]
+    I --> V[(Supabase vector store)]
+    API --> C[Chat workflow]
+    C --> V
+    C --> G[Grounded answer\nwith source IDs]
+```
+
+The API is stateless between requests where possible; durable workspace,
+dataset, dashboard, message, and retrieval data are held in Supabase. LLM model
+and RAG policies are version-controlled in `config/`.
+
+## Requirements
+
+- Python 3.11 (the production image uses Python 3.11).
+- A Supabase project configured for the application's database, storage bucket,
+  authentication, and vector-search functions.
+- A Groq API key for the configured agent models. An OpenRouter key is needed
+  only if you switch an agent policy to the OpenRouter provider.
+- A Hugging Face token where downloading the configured embedding/reranker
+  models requires it.
+- Docker Desktop, if running the production container locally.
+
+## Quick start (development)
+
+From the parent implementation directory, run:
 
 ```powershell
-uvicorn app.main:app --reload
+cd "Multi-Agent-RAG-Platform-Engine"
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+Copy-Item .env.sample .env
 ```
 
-## Architecture
+Fill in the values in `.env`; do not commit it. At minimum, a working runtime
+needs `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `GROQ_API_KEY`. For the
+default multi-agent mode, leave `BI_PIPELINE_MODE=multi`.
 
-The backend uses explicit dependency boundaries:
+For a **new** Supabase project, create a private `datasets` Storage bucket and
+apply [`scripts/db.sql`](scripts/db.sql) once through the Supabase SQL editor
+before starting the API. It is a first-time, non-destructive schema bootstrap:
+it creates the application tables and profiles existing Supabase Auth accounts,
+but does not drop or migrate existing objects. Use a dedicated migration—not
+this bootstrap—when the application schema already exists.
 
-```text
-API routes -> business-intelligence application service
-           -> analysis/chat LangGraph workflows
-           -> agents and deterministic data/forecasting services
-           -> persistence repositories and RAG adapters
-```
-
-HTTP models live in `app/schemas`, agent implementations in `app/agents`,
-workflow composition and node adapters in `app/orchestration`, and external
-storage/model integrations in `app/services` and `app/rag`. Tests mirror these
-boundaries under `tests/unit`, `tests/integration`, and `tests/end_to_end`.
-
-Copy `.env.sample` to `.env` and set the Supabase service-role key. In a new
-Supabase project, create a private Storage bucket named `datasets`, then apply
-`scripts/db.sql` once in the SQL editor before starting the API. The script is a
-non-destructive first-time bootstrap: it creates the application tables,
-profiles existing Supabase Auth accounts, and never drops or migrates objects.
-If the application schema already exists, use a dedicated migration instead of
-rerunning this bootstrap.
-
-All workspace routes except `/api/health` and `/api/ready` require an `Authorization: Bearer
-<Supabase access JWT>` header. The backend validates the JWT and returns data
-only when the session belongs to its authenticated user.
-
-`POST /api/upload` accepts one to five repeated multipart `files` fields.
-Different schemas are prepared independently and synthesized into one
-session-scoped dashboard and retrieval index. `GET /api/datasets` returns the
-active workspace plus its `datasets[]`; previews use
-`POST /api/datasets/preview` with `{ "datasetId", "page", "pageSize" }`.
-Additional files can be appended with the same `POST /api/upload` endpoint
-using repeated `files` fields, up to five total datasets. Remove one with
-`DELETE /api/datasets/{dataset_id}`. Both operations rebuild the dashboard and
-retrieval index, and clear chat history that was grounded in the previous file
-set. Removing the last dataset deletes the workspace.
-Chat questions use every dataset in the active workspace by default; naming a
-file explicitly narrows the answer to that dataset.
-
-## Pipeline mode
-
-The backend always uses the version-controlled Groq agent profile in
-`config/agents.groq.toml`. Select the pipeline with the required environment
-variable:
-
-```dotenv
-BI_PIPELINE_MODE=multi
-# or: BI_PIPELINE_MODE=single
-```
-
-Restart the backend after changing it. The two modes expose
-the same upload, dashboard, chat, and chat-history API contracts.
-
-The Groq agent profile selects the provider, model, generation limits, and
-reasoning effort for every LLM invocation, including the single-dashboard and
-single-chat policies. Each LLM agent has one versioned
-TOON bundle in `app/prompts/`; the backend validates the bundle at startup and
-serializes its structured system and user context as TOON before invocation.
-The permitted browser origins are read from `.env` at startup:
-
-```dotenv
-CORS_ALLOWED_ORIGINS=http://localhost:5173,https://marsapp.vercel.app
-```
-
-Restart the backend after changing this setting.
-The multi-agent chat response has a 15-second generation limit. If it expires,
-the API returns already-retrieved recommendation evidence when available.
-Forecasting always uses the fixed Chronos-2 engine (`amazon/chronos-2`).
-Keep API keys, Supabase credentials, and other secrets in `.env` only.
-
-## Model profiles
-
-`groq` is the checked-in default and uses Groq for every LLM call. `mix` keeps
-Groq for fast routing, KPI, and chat calls while assigning anomaly detection,
-insight synthesis, dashboard generation, and the single dashboard to OpenRouter.
-The Groq profile is the only production profile; do not partially edit it.
-
-Generic cleaning, specialist join, and Supabase persistence are non-LLM
-steps. Forecast output is passed directly to insight synthesis, so the optional
-forecast-narration call is not instantiated. If a separate narration node is
-introduced later, it should use `openai/gpt-oss-20b` through Groq.
-
-Configure credentials required by the selected profile:
-
-```dotenv
-GROQ_API_KEY=your-groq-api-key
-OPENROUTER_API_KEY=your-openrouter-api-key
-```
-
-Changing `provider` does not change the agent prompts, response schemas,
-deterministic validation, fallback behavior, or API contracts.
-Runtime configuration is loaded and validated once at process startup. Missing
-credentials for the active mode fail startup immediately.
-
-Structured LLM requests make up to three bounded provider attempts. Models
-without native schema enforcement receive the exact JSON Schema in their
-system instruction and retry once a response fails validation. If Groq rejects
-a strict schema with HTTP 400, the retry uses JSON Object Mode with the same
-client-side Pydantic validation. Deterministic agent fallback is used only when
-all provider recovery attempts fail.
-
-To make explicit live requests to every configured OpenRouter model and print
-only safe response metadata, run:
+Start the development server with automatic reload:
 
 ```powershell
-python -m scripts.check_openrouter --confirm-live-request
+python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-This smoke check is opt-in, consumes real provider requests, and is never run by
-the automated test suite. Pass `--model <configured-model-id>` to retry or
-check one model without repeating the others.
-
-The multi-agent analysis flow is:
-
-```text
-CSV Upload -> pandas DataFrame -> Generic Cleaning -> Parquet Storage
-           -> Dashboard request fetches Parquet -> pandas DataFrame
-       -> Data Preparation -> LLM Orchestrator
-       -> capability-gated KPI/Trend, Anomaly, and Forecast specialists
-       -> Specialist Join -> Insight Synthesis
-       -> Dashboard Generation ----\
-       -> Retrieval Preparation -----> Output Join
-                                      -> Dashboard/Workflow Persistence
-                                      -> API Response
-                                      -> Background Retrieval Indexing
-                                      -> Final RAG Status/Persistence -> END
-```
-
-Parquet is used only as the persisted dataset format. The multi-agent graph
-passes pandas DataFrames between cleaning, preparation, specialist analysis,
-dashboard generation, and retrieval preparation; it does not create
-intermediate CSV files.
-
-RAG model assignments, embedding and reranking limits, retrieval thresholds,
-and document chunking settings live in `config/rag.toml`. Both checked-in TOML
-files are validated when the API starts, so invalid settings fail early with a
-configuration error.
-
-The embedding model is `BAAI/bge-small-en-v1.5` and the second-stage reranker is
-`BAAI/bge-reranker-v2-m3`. Both are loaded lazily through Sentence Transformers,
-download their weights on first use, and let PyTorch select CUDA when available
-or fall back to CPU. BGE-small produces normalized 384-dimensional vectors.
-Short retrieval queries receive BGE's recommended English query instruction,
-while indexed documents remain unprefixed.
-The reranker scores query-document pairs from the vector search candidates.
-
-The fresh-project schema creates `document_chunks` and its vector-search
-function with `vector(384)`, matching the BGE-small embedding output. Projects
-that applied the 1024-dimensional Voyage migration must stop the API and run
-`scripts/rollback_voyage_4_nano_to_bge_small.sql` once in the Supabase SQL editor
-before restarting. The rollback preserves uploaded files but clears derived
-dashboards and vectors so the next dashboard request rebuilds them consistently.
-
-Dashboard generation and retrieval preparation must both report completion or
-failure before the graph's output join runs. The top-level business intelligence
-service persists and returns the usable dashboard before starting the expensive
-embedding/index replacement as a response background task. The workspace reports
-`ragStatus: indexing` until that task records `ready` or `failed`; chat and
-dataset mutations wait for indexing to finish. Optional specialist and retrieval
-failures produce a partial dashboard with warnings; cleaning, preparation,
-dashboard, or persistence failures produce a failed result.
-
-Multi-agent chat uses a separate pipeline:
-
-```text
-Session Validation -> Input Guardrail -> History-Aware Session Retrieval
-                   -> Cross-Encoder Reranking -> Chat Agent
-                   -> Output Grounding Guardrail -> Chat Response
-```
-
-Both pipeline modes use the same configured chunker and transactional Supabase
-index replacement. Multi-agent retrieval combines compact analytical findings
-with bounded prepared-row batches so detailed lookups are not limited to
-dashboard summaries. Recent conversation history is used to resolve follow-up
-references, but only retrieved documents are accepted as factual evidence.
-
-## Tests
+Useful checks:
 
 ```powershell
-pytest -q
+Invoke-RestMethod http://127.0.0.1:8000/api/health
+# Expected: @{status = "ok"}
 ```
 
-## Orchestration
+The interactive OpenAPI documentation is available at
+`http://127.0.0.1:8000/docs` while the server is running.
 
-USER UPLOAD
-│
-▼
-Generic Cleaning Service
-│
-▼
-Data Preparation Agent
-│
-▼
-Orchestrator Agent
-│
-├──────────────┬──────────────────┐
-▼ ▼ ▼
-KPI & Trend Anomaly Detection Forecasting
-Agent Agent Agent
-│ │ │
-└──────────────┴──────────────────┘
-│
-▼
-Specialist Join
-│
-▼
-Insight Synthesis Agent
-│
-┌─────────┴──────────┐
-▼ ▼
-Dashboard Generation Retrieval Preparation
-Agent Agent
-│ │
-▼ ▼
-Dashboard JSON RAG Documents / Chunks
-│ │
-└─────────┬──────────┘
-▼
-Supabase Persistence
+On macOS/Linux, activate the virtual environment with:
+
+```bash
+source .venv/bin/activate
+```
+
+## Production run (Docker)
+
+The provided Dockerfile installs only the service runtime and starts Uvicorn on
+port 8000. Build and run it from this directory:
+
+```powershell
+docker build -t mars-api:latest .
+docker run --rm --env-file .env -p 8000:8000 mars-api:latest
+```
+
+For a long-running deployment, use your platform's secret manager instead of
+shipping a local `.env` file, expose the container only behind HTTPS, and set
+`CORS_ALLOWED_ORIGINS` to the deployed UI origin(s). The container healthcheck
+uses `GET /`; platform readiness probes can use `GET /api/ready`.
+
+## Configuration
+
+Copy [`.env.sample`](.env.sample) to `.env` and replace placeholder values.
+
+| Setting | Purpose |
+| --- | --- |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated browser origins allowed to call the API. |
+| `BI_PIPELINE_MODE` | `multi` (default) for the LangGraph specialist workflow, or `single` for the compatible single-agent path. |
+| `SUPABASE_URL` | Supabase project URL. |
+| `SUPABASE_SERVICE_ROLE_KEY` | Server-side Supabase credential. Keep it secret; never expose it to the browser. |
+| `SUPABASE_STORAGE_BUCKET` | Dataset-storage bucket; defaults to `datasets`. |
+| `GROQ_API_KEY` | Key used by the default agent and evaluation models. |
+| `OPENROUTER_API_KEY` | Required only for policies that select OpenRouter. |
+| `HF_TOKEN` | Hugging Face access token for model downloads when needed. |
+| `LANGSMITH_TRACING`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT` | Optional tracing and LangSmith experiment configuration. |
+| `EVAL_JUDGE_MODEL`, `EVAL_REPETITIONS`, `EVAL_MAX_CONCURRENCY` | LangSmith quality-evaluation controls. |
+| `RAGAS_EVALUATOR_MODEL` | Optional override for the offline RAGAS judge model. |
+
+`config/agents.groq.toml` defines each agent's provider, model, temperature,
+token budget, and reasoning effort. The checked-in default assigns
+`openai/gpt-oss-20b` to focused tasks and chat, and
+`openai/gpt-oss-120b` to synthesis/dashboard work. `config/rag.toml` defines
+the retrieval policy: BGE-small embeddings (384 dimensions), an eight-document
+vector search, `BAAI/bge-reranker-v2-m3` reranking, and four chat-context
+documents.
+
+## Analysis workflow (multi-agent mode)
+
+The primary workflow is compiled by
+[`app/orchestration/graphs/analysis_graph.py`](app/orchestration/graphs/analysis_graph.py).
+Its state is an `AnalysisState` passed between named LangGraph nodes.
+
+```mermaid
+flowchart TD
+    S([Start]) --> C[Generic cleaning]
+    C --> P[Data preparation]
+    P --> O[Orchestrator]
+    O --> K[KPI and trend specialist]
+    O --> A[Anomaly-detection specialist]
+    O --> F[Forecasting specialist]
+    K --> J[Specialist join]
+    A --> J
+    F --> J
+    J --> I[Insight synthesis]
+    I --> D[Dashboard generation]
+    I --> R[Retrieval preparation]
+    D --> E([End])
+    R --> E
+```
+
+The flow is deliberately split between deterministic and generative work:
+
+- **Generic cleaning** applies baseline cleaning and records the result.
+- **Data preparation** profiles the workspace data and produces a preparation
+  plan that the rest of the workflow can safely use.
+- **Orchestrator** selects and configures the specialist work required for the
+  dataset and question; specialists can be skipped where inappropriate.
+- **KPI/trend, anomaly detection, and forecasting** produce structured,
+  evidence-bearing findings. They fan out after planning and fan in at the
+  specialist join.
+- **Insight synthesis** converts specialist outputs into a coherent
+  business-level account, while retaining limitations and provenance.
+- **Dashboard generation** creates the validated dashboard response.
+- **Retrieval preparation** builds documents for the workspace's later chat
+  retrieval/indexing path.
+
+### Execution, persistence, and recovery details
+
+Uploaded workspace data is cleaned and persisted as Parquet, but the
+multi-agent graph hands in-memory pandas DataFrames between its analysis nodes;
+it does not create temporary CSVs at each stage. After the dashboard is
+persisted, vector indexing can continue as a background task. The workspace
+reports `ragStatus: indexing` until indexing records `ready` or `failed`; chat
+and dataset mutations wait for that process to finish.
+
+Cleaning, preparation, dashboard generation, and persistence are required
+stages. Specialist and retrieval-preparation failures can still yield a
+`partial` dashboard with visible warnings. Forecasting is deterministic and
+uses the fixed Chronos-2 engine (`amazon/chronos-2`); it does not rely on an
+LLM to calculate the forecast itself.
+
+Prompt bundles live under `app/prompts/` as version-controlled TOON files. They
+are decoded and validated during start-up. Structured model responses are
+validated with Pydantic, and the provider layer uses bounded recovery attempts
+before selecting a deterministic fallback.
+
+The pipeline runner in
+[`app/services/analysis/pipelines.py`](app/services/analysis/pipelines.py)
+marks an execution `success`, `partial`, or `failed`. A dashboard can be
+returned as `partial` if optional specialist work fails or if a safe fallback
+was required; this avoids reporting a deceptively complete result.
+
+### Single-agent comparison mode
+
+Set `BI_PIPELINE_MODE=single` to use the compact
+`BusinessIntelligenceAgent`. It profiles the dataset and creates the dashboard
+through one LangGraph path, with a separate chat branch for calculation,
+retrieval, reranking, and response generation. This is useful as a baseline;
+the API contract stays compatible with multi-agent mode.
+
+## RAG chat workflow
+
+The chat graph is compiled by
+[`app/orchestration/graphs/chat_graph.py`](app/orchestration/graphs/chat_graph.py).
+It operates only within the active user's indexed workspace.
+
+```mermaid
+flowchart TD
+    S([Question]) --> G[Guardrail]
+    G -->|unsafe or prompt-injection pattern| B[Blocked response]
+    G -->|allowed| R[Vector retrieval]
+    R -->|no evidence| H[General / insufficient-evidence response]
+    R -->|candidates| RR[Rerank candidates]
+    RR --> L[Generate draft]
+    L --> V[Grounding and source validation]
+    H --> V
+    B --> E([End])
+    V --> E
+```
+
+The retrieval route performs session-scoped vector search, then reranks the
+candidate documents before model generation. If retrieval returns no
+candidates, MARS returns a helpful insufficient-context response rather than
+making an unsupported claim. The final grounding step checks the draft against
+the returned evidence and source IDs. Timeouts and failures produce a safe
+fallback response.
+
+Recent conversation history helps interpret follow-up questions, but retrieved
+workspace documents are the only accepted factual evidence. BGE-small creates
+normalised 384-dimensional embeddings; the Supabase `document_chunks` vector
+column and search function must use the same 384 dimensions. Treat a change to
+embedding dimensions as a schema migration and rebuild derived vectors before
+serving chat again.
+
+## HTTP API
+
+All application endpoints are under `/api`; workspace endpoints require a
+Supabase-issued access JWT. Common endpoints are:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/health` | Liveness check. |
+| `GET /api/ready` | Readiness check. |
+| `POST /api/upload` | Upload one or more files and run workspace analysis. |
+| `GET /api/datasets` | Read active workspace/dataset details. |
+| `POST /api/datasets/preview` | Retrieve a paginated data preview. |
+| `DELETE /api/datasets/{dataset_id}` | Remove a dataset and reanalyse as appropriate. |
+| `GET /api/dashboard` | Retrieve the active dashboard. |
+| `POST /api/workspace/reset` | Reset the active workspace. |
+| `POST /api/chat` | Ask a grounded question about the active workspace. |
+| `GET /api/chat/history` | Retrieve saved conversation history. |
+| `POST /api/chat/reset` | Clear workspace chat history. |
+| `GET /api/chat/status` | Check chat/index status. |
+| `POST /api/chat/rebuild` | Start a background rebuild of retrieval documents. |
+
+Use `/docs` for request and response schemas rather than treating this table as
+a replacement for the OpenAPI contract.
+
+`POST /api/upload` accepts one to five multipart `files` fields. MARS prepares
+different schemas independently, synthesises them into one session dashboard
+and retrieval index, and clears chat history when the dataset set changes.
+Questions normally use every dataset in the active workspace; explicitly naming
+a file narrows the question to that dataset.
+
+## Evaluation
+
+MARS uses two complementary evaluation suites. They answer different questions
+and should be reported separately.
+
+| Suite | Assesses | Command |
+| --- | --- | --- |
+| LangSmith quality evaluation | Multi-agent/dashboard planning, chat guardrails, query safety, and other defined quality targets. | `python -m evaluation.langsmith.quality_runner` |
+| RAGAS evaluation | Production chat retrieval, reranking, evidence grounding, and final-answer quality. | `python -m evaluation.ragas.runner --session-id <id>` |
+
+### Run the LangSmith quality suite
+
+Set `LANGSMITH_TRACING=true`, `LANGSMITH_API_KEY`, and `LANGSMITH_PROJECT` to
+send repeated experiments to LangSmith. The local run verifies the same target
+and evaluator wiring without creating a remote experiment.
+
+```powershell
+# Local quality results in evaluation/langsmith/results/
+python -m evaluation.langsmith.quality_runner
+
+# Synchronise datasets and create a LangSmith experiment
+python -m evaluation.langsmith.quality_runner --langsmith --repetitions 3 --max-concurrency 1
+
+# Create a compact quality summary
+python -m evaluation.langsmith.summarize_quality
+```
+
+See [`evaluation/langsmith/README.md`](evaluation/langsmith/README.md) for suite
+definitions, metric interpretation, and judge-agreement guidance.
+
+### Run the RAGAS suite
+
+RAGAS uses the real production chat graph, not the HTTP API. Create a dedicated
+evaluation workspace through MARS first; do not use a real user's workspace.
+After the workspace contains its evaluation dataset, replace only that
+workspace's index with the checked-in corpus:
+
+```powershell
+# Index the checked-in evaluation data into the dedicated workspace
+python -m evaluation.ragas.runner --session-id <dedicated-evaluation-session-id> --index-evaluation-data
+
+# Run the full retrieval, generation, and offline RAGAS judge evaluation
+python -m evaluation.ragas.runner --session-id <dedicated-evaluation-session-id> --repetitions 3
+
+# Retrieval and graph-capture dry run; skips offline RAGAS judge calls
+python -m evaluation.ragas.runner --session-id <dedicated-evaluation-session-id> --skip-ragas
+```
+
+The results are written to `evaluation/ragas/results/`, including case-level,
+summary, and reranker-comparison files. See
+[`evaluation/ragas/README.md`](evaluation/ragas/README.md) for prerequisites,
+metrics, and interpretation.
+
+## Python tests
+
+Run the complete automated test suite:
+
+```powershell
+python -m pytest
+```
+
+Useful targeted commands:
+
+```powershell
+# Fast, isolated tests
+python -m pytest tests/unit
+
+# Service and graph integration tests
+python -m pytest tests/integration
+
+# Full API/workspace flows using test doubles
+python -m pytest tests/end_to_end
+
+# Evaluation-suite tests
+python -m pytest tests/unit/evaluation tests/integration/retrieval/test_ragas_runner.py
+
+# A concise pass/fail run
+python -m pytest -q
+```
+
+The tests are designed to avoid calling external providers where possible;
+LangSmith and RAGAS commands above are explicit evaluation runs and may use the
+configured external services.
+
+## Repository guide
+
+```text
+app/
+  api/                 FastAPI routes and authentication boundary
+  agents/              Specialist and single-agent implementations
+  orchestration/       LangGraph states, nodes, and workflow wiring
+  rag/                 Document building, embeddings, retrieval, reranking
+  services/            Workspace, analysis, indexing, chat, and persistence facades
+  core/                Settings, providers, prompts, logging, tracing
+  schemas/             Pydantic API and workflow contracts
+config/
+  agents.groq.toml     Version-controlled LLM policies
+  rag.toml             Chunking, embedding, reranking, retrieval policies
+evaluation/
+  langsmith/           Quality datasets, targets, evaluators, and reports
+  ragas/               Retrieval and grounded-answer evaluation suite
+tests/
+  unit/ integration/ end_to_end/
+Dockerfile              Production API image
+.env.sample             Required environment-variable template
+```
+
+## Operational notes
+
+- Keep the Supabase service-role key and provider keys server-side. Never place
+  them in the frontend bundle or commit `.env`.
+- The first run may take longer while local embedding and reranker models are
+  downloaded and warmed.
+- Changing a model or RAG policy should be treated as a behaviour change: run
+  Python tests, then the appropriate LangSmith and/or RAGAS evaluation before
+  reporting quality results.
+- For deployed systems, monitor `/api/health`, application logs, provider
+  errors, and the persisted workflow status (`success`, `partial`, or `failed`).
